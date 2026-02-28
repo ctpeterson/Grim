@@ -1,0 +1,18 @@
+Grim — Third-Party Notices
+==========================
+
+This file lists the third-party software that Grim depends on at
+build time and/or link time. Grim's own source code is released under
+the MIT License (see LICENSE).
+
+──────────────────────────────────────────────────────────────────────
+
+Grid
+  URL:     https://github.com/paboyle/Grid
+  License: GNU General Public License v2.0 (GPLv2)
+  Use:     Grim generates C++ code that #includes Grid headers and
+           links against the Grid library. No Grid source code is
+           distributed as part of this repository.
+  Note:    Compiled binaries that link Grid constitute a combined work
+           under the GPLv2. Distribution of such binaries must comply
+           with the GPLv2 terms.
