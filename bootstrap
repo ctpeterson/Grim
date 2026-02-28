@@ -1,0 +1,692 @@
+#!/usr/bin/env python3
+"""
+bootstrap.py — download, build, and install Grid and its dependencies
+into the directory where this script is run.
+
+Usage
+-----
+    python3 bootstrap.py [OPTIONS]
+
+Run `python3 bootstrap.py --help` for a full list of flags.
+
+Everything is installed under:
+
+    <cwd>/
+        deps/
+            lib/, include/, bin/   ← installed libraries
+            src/                   ← all source / build trees
+                gmp/
+                mpfr/
+                fftw/
+                openssl/
+                hdf5/
+                lime/
+                libunwind/
+                nim/
+                grid/              ← cloned Grid source
+                grid-build/        ← out-of-source Grid build
+        grid-install/              ← final Grid install + Nim (--prefix)
+"""
+
+from __future__ import annotations
+
+import argparse
+import multiprocessing
+import os
+import shlex
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+# ──────────────────────────────────────────────────────────────────────
+# Helpers
+# ──────────────────────────────────────────────────────────────────────
+
+def run(cmd: str | list[str], *, cwd: Path | None = None, env: dict | None = None) -> None:
+    """Run a shell command, streaming output, aborting on failure."""
+    if isinstance(cmd, str):
+        cmd = shlex.split(cmd)
+    merged_env = {**os.environ, **(env or {})}
+    print(f"\n>>> {' '.join(cmd)}")
+    subprocess.check_call(cmd, cwd=cwd, env=merged_env)
+
+
+def ensure_dir(p: Path) -> Path:
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def which(name: str) -> str | None:
+    return shutil.which(name)
+
+
+def download(url: str, dest: Path) -> None:
+    """Download a URL to dest, verifying we didn't get an HTML error page."""
+    run(["curl", "-fL", "-o", str(dest), url])
+    # Sanity-check: if the server gave us HTML instead of a tarball, abort early
+    # rather than letting tar fail with a confusing message.
+    with open(dest, "rb") as f:
+        header = f.read(256)
+    if b"<html" in header.lower() or b"<!doctype" in header.lower():
+        dest.unlink()
+        raise RuntimeError(
+            f"Download of {url} returned an HTML page, not an archive.\n"
+            f"The URL may have changed. Please check it manually."
+        )
+
+
+NJOBS = str(multiprocessing.cpu_count())
+
+# ──────────────────────────────────────────────────────────────────────
+# Dependency builders
+# ──────────────────────────────────────────────────────────────────────
+
+def build_gmp(prefix: Path, jobs: str) -> None:
+    src = ensure_dir(prefix / "src" / "gmp")
+    if (prefix / "lib" / "libgmp.a").exists() or (prefix / "lib" / "libgmp.so").exists():
+        print("GMP already installed, skipping.")
+        return
+    tarball = "gmp-6.3.0.tar.xz"
+    url = f"https://gmplib.org/download/gmp/{tarball}"
+    if not (src / tarball).exists():
+        download(url, src / tarball)
+    run(f"tar xf {tarball}", cwd=src)
+    build_dir = src / "gmp-6.3.0"
+    run(f"./configure --prefix={prefix} --enable-cxx", cwd=build_dir)
+    run(f"make -j{jobs}", cwd=build_dir)
+    run("make install", cwd=build_dir)
+
+
+def build_mpfr(prefix: Path, gmp_prefix: Path, jobs: str) -> None:
+    src = ensure_dir(prefix / "src" / "mpfr")
+    if (prefix / "lib" / "libmpfr.a").exists() or (prefix / "lib" / "libmpfr.so").exists():
+        print("MPFR already installed, skipping.")
+        return
+    tarball = "mpfr-4.2.1.tar.xz"
+    url = f"https://ftp.gnu.org/gnu/mpfr/{tarball}"
+    if not (src / tarball).exists():
+        download(url, src / tarball)
+    run(f"tar xf {tarball}", cwd=src)
+    build_dir = src / "mpfr-4.2.1"
+    run(f"./configure --prefix={prefix} --with-gmp={gmp_prefix}", cwd=build_dir)
+    run(f"make -j{jobs}", cwd=build_dir)
+    run("make install", cwd=build_dir)
+
+
+def build_fftw(prefix: Path, jobs: str) -> None:
+    src = ensure_dir(prefix / "src" / "fftw")
+    if (prefix / "lib" / "libfftw3.a").exists() or (prefix / "lib" / "libfftw3.so").exists():
+        print("FFTW already installed, skipping.")
+        return
+    tarball = "fftw-3.3.10.tar.gz"
+    url = f"https://www.fftw.org/{tarball}"
+    if not (src / tarball).exists():
+        download(url, src / tarball)
+    run(f"tar xf {tarball}", cwd=src)
+    build_dir = src / "fftw-3.3.10"
+    # Double precision
+    run(f"./configure --prefix={prefix}", cwd=build_dir)
+    run(f"make -j{jobs}", cwd=build_dir)
+    run("make install", cwd=build_dir)
+    run("make clean", cwd=build_dir)
+    # Single precision (Grid needs both)
+    run(f"./configure --prefix={prefix} --enable-float", cwd=build_dir)
+    run(f"make -j{jobs}", cwd=build_dir)
+    run("make install", cwd=build_dir)
+
+
+def build_openssl(prefix: Path, jobs: str) -> None:
+    src = ensure_dir(prefix / "src" / "openssl")
+    if (prefix / "lib" / "libssl.a").exists() or (prefix / "lib" / "libssl.so").exists():
+        print("OpenSSL already installed, skipping.")
+        return
+    tarball = "openssl-3.2.1.tar.gz"
+    url = f"https://github.com/openssl/openssl/releases/download/openssl-3.2.1/{tarball}"
+    if not (src / tarball).exists():
+        download(url, src / tarball)
+    run(f"tar xf {tarball}", cwd=src)
+    build_dir = src / "openssl-3.2.1"
+    run(f"./config --prefix={prefix} --openssldir={prefix / 'ssl'}", cwd=build_dir)
+    run(f"make -j{jobs}", cwd=build_dir)
+    run("make install_sw", cwd=build_dir)
+
+
+def build_hdf5(prefix: Path, jobs: str) -> None:
+    src = ensure_dir(prefix / "src" / "hdf5")
+    if (prefix / "lib" / "libhdf5.a").exists() or (prefix / "lib" / "libhdf5.so").exists():
+        print("HDF5 already installed, skipping.")
+        return
+    tag = "hdf5_1.14.6"
+    tarball = f"{tag}.tar.gz"
+    url = f"https://github.com/HDFGroup/hdf5/archive/refs/tags/{tarball}"
+    if not (src / tarball).exists():
+        download(url, src / tarball)
+    run(f"tar xf {tarball}", cwd=src)
+    build_dir = src / f"hdf5-{tag}"
+    run(f"./configure --prefix={prefix} --enable-cxx --enable-build-mode=production", cwd=build_dir)
+    run(f"make -j{jobs}", cwd=build_dir)
+    run("make install", cwd=build_dir)
+
+
+def build_lime(prefix: Path, jobs: str) -> None:
+    src = ensure_dir(prefix / "src" / "lime")
+    if (prefix / "lib" / "liblime.a").exists() or (prefix / "lib" / "liblime.so").exists():
+        print("LIME (c-lime) already installed, skipping.")
+        return
+    clone_dir = src / "c-lime"
+    if not clone_dir.exists():
+        run(f"git clone https://github.com/usqcd-software/c-lime.git", cwd=src)
+    run("./autogen.sh", cwd=clone_dir)
+    run(f"./configure --prefix={prefix}", cwd=clone_dir)
+    run(f"make -j{jobs}", cwd=clone_dir)
+    run("make install", cwd=clone_dir)
+
+
+def build_libunwind(prefix: Path, jobs: str) -> None:
+    src = ensure_dir(prefix / "src" / "libunwind")
+    if (prefix / "lib" / "libunwind.a").exists() or (prefix / "lib" / "libunwind.so").exists():
+        print("libunwind already installed, skipping.")
+        return
+    tarball = "libunwind-1.8.1.tar.gz"
+    url = f"https://github.com/libunwind/libunwind/releases/download/v1.8.1/{tarball}"
+    if not (src / tarball).exists():
+        download(url, src / tarball)
+    run(f"tar xf {tarball}", cwd=src)
+    build_dir = src / "libunwind-1.8.1"
+    run(f"./configure --prefix={prefix}", cwd=build_dir)
+    run(f"make -j{jobs}", cwd=build_dir)
+    run("make install", cwd=build_dir)
+
+
+def build_nim(prefix: Path, deps_prefix: Path) -> None:
+    """Download and install a pre-built Nim into `prefix`.
+    
+    Symlinks binaries into prefix/bin/ so that Nim resolves its
+    stdlib from the extracted tarball's own ../lib/ directory.
+    """
+    nim_bin = prefix / "bin" / "nim"
+    if nim_bin.exists():
+        print("Nim already installed, skipping.")
+        return
+    import platform
+    machine = platform.machine().lower()
+    if machine in ("x86_64", "amd64"):
+        arch = "x64"
+    elif machine in ("aarch64", "arm64"):
+        arch = "arm64"
+    else:
+        raise RuntimeError(f"Unsupported architecture for Nim binary: {machine}")
+    version = "2.2.2"
+    tarball = f"nim-{version}-linux_{arch}.tar.xz"
+    url = f"https://nim-lang.org/download/{tarball}"
+    src = ensure_dir(deps_prefix / "src" / "nim")
+    if not (src / tarball).exists():
+        download(url, src / tarball)
+    run(f"tar xf {tarball}", cwd=src)
+    nim_dir = src / f"nim-{version}"
+    # Symlink binaries so Nim resolves ../lib relative to the real binary
+    ensure_dir(prefix / "bin")
+    for item in (nim_dir / "bin").iterdir():
+        dest = prefix / "bin" / item.name
+        if dest.exists() or dest.is_symlink():
+            dest.unlink()
+        dest.symlink_to(item.resolve())
+    print(f"Nim {version} installed to {prefix} (symlinked from {nim_dir})")
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Grid builder
+# ──────────────────────────────────────────────────────────────────────
+
+def build_grid(args: argparse.Namespace, deps_prefix: Path) -> None:
+    root = Path.cwd()
+    grid_src = deps_prefix / "src" / "grid"
+    grid_build = deps_prefix / "src" / "grid-build"
+    grid_install = root / "grid-install"
+
+    # Clone if needed
+    if not grid_src.exists():
+        run(f"git clone --branch {args.grid_branch} https://github.com/paboyle/Grid.git {grid_src}")
+    elif args.grid_pull:
+        run("git pull", cwd=grid_src)
+
+    # Bootstrap
+    run("./bootstrap.sh", cwd=grid_src)
+
+    # Build out-of-source
+    ensure_dir(grid_build)
+
+    # ── Assemble configure command ──────────────────────────────────
+    configure_cmd: list[str] = [str(grid_src / "configure")]
+
+    configure_cmd.append(f"--prefix={grid_install}")
+
+    # ── SIMD ────────────────────────────────────────────────────────
+    configure_cmd.append(f"--enable-simd={args.simd}")
+    if args.gen_simd_width is not None:
+        configure_cmd.append(f"--enable-gen-simd-width={args.gen_simd_width}")
+    if args.gen_scalar:
+        configure_cmd.append("--enable-gen-scalar=yes")
+
+    # ── Communications ──────────────────────────────────────────────
+    configure_cmd.append(f"--enable-comms={args.comms}")
+
+    # ── Accelerator (GPU) ───────────────────────────────────────────
+    configure_cmd.append(f"--enable-accelerator={args.accelerator}")
+    if args.unified is not None:
+        configure_cmd.append(f"--enable-unified={'yes' if args.unified else 'no'}")
+    if args.accelerator_aware_mpi is not None:
+        val = "yes" if args.accelerator_aware_mpi else "no"
+        configure_cmd.append(f"--enable-accelerator-aware-mpi={val}")
+    if args.setdevice:
+        configure_cmd.append("--enable-setdevice")
+
+    # ── Shared memory ──────────────────────────────────────────────
+    if args.shm is not None:
+        configure_cmd.append(f"--enable-shm={args.shm}")
+    if args.shmpath is not None:
+        configure_cmd.append(f"--enable-shmpath={args.shmpath}")
+    if args.shm_force_mpi:
+        configure_cmd.append("--enable-shm-force-mpi")
+    if args.shm_fast_path:
+        configure_cmd.append("--enable-shm-fast-path")
+
+    # ── Allocator ───────────────────────────────────────────────────
+    if args.alloc_align is not None:
+        configure_cmd.append(f"--enable-alloc-align={args.alloc_align}")
+    if args.alloc_cache is not None:
+        val = "yes" if args.alloc_cache else "no"
+        configure_cmd.append(f"--enable-alloc-cache={val}")
+
+    # ── Gauge group / fermions ──────────────────────────────────────
+    configure_cmd.append(f"--enable-Nc={args.nc}")
+    if args.sp:
+        configure_cmd.append("--enable-Sp=yes")
+    if args.fermion_reps is not None:
+        val = "yes" if args.fermion_reps else "no"
+        configure_cmd.append(f"--enable-fermion-reps={val}")
+    if args.gparity is not None:
+        val = "yes" if args.gparity else "no"
+        configure_cmd.append(f"--enable-gparity={val}")
+    if args.zmobius is not None:
+        val = "yes" if args.zmobius else "no"
+        configure_cmd.append(f"--enable-zmobius={val}")
+
+    # ── RNG ─────────────────────────────────────────────────────────
+    configure_cmd.append(f"--enable-rng={args.rng}")
+
+    # ── Debug / optimisation ────────────────────────────────────────
+    if args.debug:
+        configure_cmd.append("--enable-debug=yes")
+
+    # ── Timers ──────────────────────────────────────────────────────
+    if args.no_timers:
+        configure_cmd.append("--enable-timers=no")
+
+    # ── FP16 ─────────────────────https://github.com/ctpeterson/Grim.git───────────────────────────────────
+    if args.sfw_fp16 is not None:
+        val = "yes" if args.sfw_fp16 else "no"
+        configure_cmd.append(f"--enable-sfw-fp16={val}")
+
+    # ── Tracing ─────────────────────────────────────────────────────
+    if args.tracing is not None:
+        configure_cmd.append(f"--enable-tracing={args.tracing}")
+
+    # ── Reduction ───────────────────────────────────────────────────
+    if args.reduction is not None:
+        configure_cmd.append(f"--enable-reduction={args.reduction}")
+
+    # ── Checksums / logging ─────────────────────────────────────────
+    if args.checksum_comms:
+        configure_cmd.append("--enable-checksum-comms=yes")
+    if args.log_views:
+        configure_cmd.append("--enable-log-views=yes")
+
+    # ── Chroma regression ───────────────────────────────────────────
+    if args.chroma:
+        configure_cmd.append("--enable-chroma")
+
+    # ── Dependency paths ────────────────────────────────────────────
+    # Always point at the deps prefix we just built into
+    configure_cmd.append(f"--with-gmp={deps_prefix}")
+    configure_cmd.append(f"--with-mpfr={deps_prefix}")
+
+    if args.with_fftw or (deps_prefix / "lib" / "libfftw3.a").exists():
+        configure_cmd.append(f"--with-fftw={args.with_fftw or deps_prefix}")
+    if args.with_hdf5 or (deps_prefix / "lib" / "libhdf5.a").exists():
+        configure_cmd.append(f"--with-hdf5={args.with_hdf5 or deps_prefix}")
+    if args.with_lime or (deps_prefix / "lib" / "liblime.a").exists():
+        configure_cmd.append(f"--with-lime={args.with_lime or deps_prefix}")
+    if args.with_openssl or (deps_prefix / "lib" / "libssl.a").exists():
+        configure_cmd.append(f"--with-openssl={args.with_openssl or deps_prefix}")
+    if args.with_unwind or (deps_prefix / "lib" / "libunwind.a").exists():
+        configure_cmd.append(f"--with-unwind={args.with_unwind or deps_prefix}")
+
+    # ── LAPACK / MKL / IPP ──────────────────────────────────────────
+    if args.lapack is not None:
+        configure_cmd.append(f"--enable-lapack={args.lapack}")
+    if args.mkl is not None:
+        configure_cmd.append(f"--enable-mkl={args.mkl}")
+    if args.ipp is not None:
+        configure_cmd.append(f"--enable-ipp={args.ipp}")
+
+    # ── Extra --with-* overrides (user-supplied prefix paths) ───────
+    if args.with_gmp:
+        # Override the deps-prefix default
+        configure_cmd = [c for c in configure_cmd if not c.startswith("--with-gmp=")]
+        configure_cmd.append(f"--with-gmp={args.with_gmp}")
+    if args.with_mpfr:
+        configure_cmd = [c for c in configure_cmd if not c.startswith("--with-mpfr=")]
+        configure_cmd.append(f"--with-mpfr={args.with_mpfr}")
+
+    # ── Compiler overrides ──────────────────────────────────────────
+    env: dict[str, str] = {}
+    if args.cxx:
+        env["CXX"] = args.cxx
+    if args.cc:
+        env["CC"] = args.cc
+    if args.mpicxx:
+        env["MPICXX"] = args.mpicxx
+    if args.cxxflags:
+        env["CXXFLAGS"] = args.cxxflags
+    if args.ldflags:
+        env["LDFLAGS"] = args.ldflags
+
+    # ── Extra raw flags passed through verbatim ─────────────────────
+    if args.extra_configure_flags:
+        configure_cmd.extend(shlex.split(args.extra_configure_flags))
+
+    # ── Run configure ───────────────────────────────────────────────
+    run(configure_cmd, cwd=grid_build, env=env if env else None)
+
+    # ── Build & install ─────────────────────────────────────────────
+    run(f"make -j{args.jobs}", cwd=grid_build)
+    if args.run_tests:
+        run(f"make -j{args.jobs} tests", cwd=grid_build)
+        run("make check", cwd=grid_build)
+    run("make install", cwd=grid_build)
+
+    print(f"\n{'='*60}")
+    print(f"Grid installed to: {grid_install}")
+    print(f"Set GRID_PREFIX={grid_install} for Grim's config.nims")
+    print(f"{'='*60}\n")
+
+
+# ──────────────────────────────────────────────────────────────────────
+# CLI
+# ──────────────────────────────────────────────────────────────────────
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="Bootstrap Grid and all dependencies into the current directory.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+examples:
+  # Minimal CPU-only build (GEN SIMD, no MPI)
+  python3 bootstrap.py
+
+  # AVX2 + MPI auto-detection
+  python3 bootstrap.py --simd AVX2 --comms mpi-auto
+
+  # CUDA GPU build
+  python3 bootstrap.py --simd GPU --comms mpi-auto --accelerator cuda --cxx nvcc
+
+  # AMD GPU (HIP) build
+  python3 bootstrap.py --simd GPU --comms mpi-auto --accelerator hip --cxx hipcc
+
+  # Intel GPU (SYCL) build
+  python3 bootstrap.py --simd GPU --comms mpi-auto --accelerator sycl --cxx dpcpp
+
+  # Knights Landing
+  python3 bootstrap.py --simd KNL --comms mpi3-auto --mkl yes --cxx icpc --mpicxx mpiicpc
+
+  # A64FX (Fugaku / ARM SVE)
+  python3 bootstrap.py --simd A64FX --comms mpi-auto
+
+  # Skip dependencies (already installed system-wide)
+  python3 bootstrap.py --skip-deps --with-gmp /usr --with-mpfr /usr
+
+  # Pass extra flags directly to Grid's configure
+  python3 bootstrap.py --extra-configure-flags="--disable-fermion-reps --enable-Nc=4"
+""",
+    )
+
+    # ── Dependency control ──────────────────────────────────────────
+    dep = p.add_argument_group("dependency control")
+    dep.add_argument("--skip-deps", action="store_true",
+                     help="Do not build any dependencies; assume they are installed elsewhere.")
+    dep.add_argument("--skip-nim", action="store_true",
+                     help="Skip installing Nim (use system nim instead)")
+    dep.add_argument("--skip-gmp", action="store_true", help="Skip building GMP")
+    dep.add_argument("--skip-mpfr", action="store_true", help="Skip building MPFR")
+    dep.add_argument("--skip-fftw", action="store_true", help="Skip building FFTW")
+    dep.add_argument("--skip-openssl", action="store_true", help="Skip building OpenSSL")
+    dep.add_argument("--skip-hdf5", action="store_true", help="Skip building HDF5")
+    dep.add_argument("--skip-lime", action="store_true", help="Skip building c-lime")
+    dep.add_argument("--skip-libunwind", action="store_true", help="Skip building libunwind")
+
+    # ── Dependency prefix overrides (use pre-installed) ─────────────
+    paths = p.add_argument_group("dependency prefix overrides (skip build, use existing)")
+    paths.add_argument("--with-gmp", metavar="PREFIX",
+                       help="Use GMP from this prefix instead of building it")
+    paths.add_argument("--with-mpfr", metavar="PREFIX",
+                       help="Use MPFR from this prefix instead of building it")
+    paths.add_argument("--with-fftw", metavar="PREFIX",
+                       help="Use FFTW from this prefix instead of building it")
+    paths.add_argument("--with-openssl", metavar="PREFIX",
+                       help="Use OpenSSL from this prefix instead of building it")
+    paths.add_argument("--with-hdf5", metavar="PREFIX",
+                       help="Use HDF5 from this prefix instead of building it")
+    paths.add_argument("--with-lime", metavar="PREFIX",
+                       help="Use LIME (c-lime) from this prefix instead of building it")
+    paths.add_argument("--with-unwind", metavar="PREFIX",
+                       help="Use libunwind from this prefix instead of building it")
+
+    # ── SIMD ────────────────────────────────────────────────────────
+    simd = p.add_argument_group("SIMD target")
+    simd.add_argument("--simd", default="GEN",
+                      choices=["GEN", "SSE4", "AVX", "AVXFMA", "AVXFMA4", "AVX2",
+                               "AVX512", "SKL", "KNL", "KNC",
+                               "NEONv8", "A64FX", "QPX", "BGQ",
+                               "GPU", "GPU-RRII"],
+                      help="SIMD instruction set (default: GEN)")
+    simd.add_argument("--gen-simd-width", type=int, metavar="BYTES",
+                      help="Width in bytes of generic SIMD vectors (default: 64)")
+    simd.add_argument("--gen-scalar", action="store_true",
+                      help="Use generic scalar (non-SIMD) implementation")
+
+    # ── Communications ──────────────────────────────────────────────
+    comm = p.add_argument_group("communications")
+    comm.add_argument("--comms", default="none",
+                      choices=["none", "mpi", "mpi-auto", "mpi3", "mpi3-auto"],
+                      help="Communication backend (default: none)")
+
+    # ── Accelerator (GPU) ───────────────────────────────────────────
+    gpu = p.add_argument_group("accelerator / GPU")
+    gpu.add_argument("--accelerator", default="none",
+                     choices=["none", "cuda", "sycl", "hip"],
+                     help="GPU acceleration backend (default: none)")
+    gpu.add_argument("--unified", default=None, action=argparse.BooleanOptionalAction,
+                     help="Unified virtual address space for accelerator loops (default: yes)")
+    gpu.add_argument("--accelerator-aware-mpi", default=None,
+                     action=argparse.BooleanOptionalAction,
+                     help="Allow MPI transfers from device memory (default: yes)")
+    gpu.add_argument("--setdevice", action="store_true",
+                     help="Set GPU device to node-local rank via cudaSetDevice / hipSetDevice")
+
+    # ── Shared memory ──────────────────────────────────────────────
+    shm = p.add_argument_group("shared memory")
+    shm.add_argument("--shm", default=None,
+                     choices=["shmopen", "shmget", "hugetlbfs", "shmnone", "nvlink", "no", "none"],
+                     help="SHM allocation technique")
+    shm.add_argument("--shmpath", metavar="PATH",
+                     help="Mmap base path for hugetlbfs (default: /var/lib/hugetlbfs/…)")
+    shm.add_argument("--shm-force-mpi", action="store_true",
+                     help="Force MPI within shared memory nodes")
+    shm.add_argument("--shm-fast-path", action="store_true",
+                     help="Allow kernels to remote-copy over intranode links")
+
+    # ── Allocator ───────────────────────────────────────────────────
+    alloc = p.add_argument_group("allocator")
+    alloc.add_argument("--alloc-align", choices=["2MB", "4k"],
+                       help="Alignment of Grid allocator (default: 2MB)")
+    alloc.add_argument("--alloc-cache", default=None, action=argparse.BooleanOptionalAction,
+                       help="Cache pool of recent frees for reuse (default: yes)")
+
+    # ── Gauge group & fermion reps ──────────────────────────────────
+    phys = p.add_argument_group("gauge group / fermion content")
+    phys.add_argument("--nc", default="3", choices=["2", "3", "4", "5", "8"],
+                      help="Number of colours Nc (default: 3)")
+    phys.add_argument("--sp", action="store_true",
+                      help="Use symplectic gauge group Sp(2N) instead of SU(N)")
+    phys.add_argument("--fermion-reps", default=None, action=argparse.BooleanOptionalAction,
+                      help="Enable extra fermion representations (default: yes)")
+    phys.add_argument("--gparity", default=None, action=argparse.BooleanOptionalAction,
+                      help="Enable G-parity boundary conditions (default: yes)")
+    phys.add_argument("--zmobius", default=None, action=argparse.BooleanOptionalAction,
+                      help="Enable Zmöbius fermion actions (default: yes)")
+
+    # ── RNG ─────────────────────────────────────────────────────────
+    rng = p.add_argument_group("random number generator")
+    rng.add_argument("--rng", default="sitmo",
+                     choices=["sitmo", "ranlux48", "mt19937"],
+                     help="RNG implementation (default: sitmo)")
+
+    # ── Intel libraries ─────────────────────────────────────────────
+    intel = p.add_argument_group("Intel libraries")
+    intel.add_argument("--mkl", metavar="yes|no|PREFIX",
+                       help="Use Intel MKL for LAPACK and FFTW (default: no)")
+    intel.add_argument("--ipp", metavar="yes|no|PREFIX",
+                       help="Use Intel IPP for fast CRC32C (default: no)")
+
+    # ── LAPACK ──────────────────────────────────────────────────────
+    la = p.add_argument_group("LAPACK")
+    la.add_argument("--lapack", metavar="yes|no|PREFIX",
+                    help="Enable LAPACK for Lanczos eigensolver (default: no)")
+
+    # ── FP16 ────────────────────────────────────────────────────────
+    fp = p.add_argument_group("precision")
+    fp.add_argument("--sfw-fp16", default=None, action=argparse.BooleanOptionalAction,
+                    help="Software FP16 conversion for comms (default: yes)")
+
+    # ── Tracing ─────────────────────────────────────────────────────
+    trace = p.add_argument_group("tracing / profiling")
+    trace.add_argument("--tracing", default=None,
+                       choices=["none", "nvtx", "roctx", "timer"],
+                       help="Profiling tracing backend (default: none)")
+
+    # ── Reduction ───────────────────────────────────────────────────
+    red = p.add_argument_group("reduction")
+    red.add_argument("--reduction", default=None, choices=["mpi", "grid"],
+                     help="Internal reduction implementation (default: grid)")
+
+    # ── Diagnostics ─────────────────────────────────────────────────
+    diag = p.add_argument_group("diagnostics")
+    diag.add_argument("--checksum-comms", action="store_true",
+                      help="Checksum all MPI communication")
+    diag.add_argument("--log-views", action="store_true",
+                      help="Log all view open/close events")
+    diag.add_argument("--debug", action="store_true",
+                      help="Build with -g instead of -O3")
+
+    # ── Timers ──────────────────────────────────────────────────────
+    tim = p.add_argument_group("timers")
+    tim.add_argument("--no-timers", action="store_true",
+                     help="Disable high-resolution timers")
+
+    # ── Chroma ──────────────────────────────────────────────────────
+    ch = p.add_argument_group("chroma")
+    ch.add_argument("--chroma", action="store_true",
+                    help="Build with Chroma regression test support")
+
+    # ── Compiler overrides ──────────────────────────────────────────
+    comp = p.add_argument_group("compiler overrides")
+    comp.add_argument("--cxx", metavar="COMPILER", help="C++ compiler (e.g. g++, icpc, nvcc, hipcc, dpcpp)")
+    comp.add_argument("--cc", metavar="COMPILER", help="C compiler")
+    comp.add_argument("--mpicxx", metavar="COMPILER", help="MPI C++ wrapper (e.g. mpicxx, mpiicpc)")
+    comp.add_argument("--cxxflags", metavar="FLAGS", help="Extra CXXFLAGS")
+    comp.add_argument("--ldflags", metavar="FLAGS", help="Extra LDFLAGS")
+
+    # ── Git / build control ─────────────────────────────────────────
+    build = p.add_argument_group("build control")
+    build.add_argument("--jobs", "-j", default=NJOBS, metavar="N",
+                       help=f"Parallel make jobs (default: {NJOBS})")
+    build.add_argument("--grid-branch", default="develop", metavar="BRANCH",
+                       help="Grid git branch to clone (default: develop)")
+    build.add_argument("--grid-pull", action="store_true",
+                       help="Run git pull in an existing grid-src checkout")
+    build.add_argument("--run-tests", action="store_true",
+                       help="Build and run Grid's test suite after compilation")
+
+    # ── Escape hatch ────────────────────────────────────────────────
+    p.add_argument("--extra-configure-flags", metavar="'FLAGS'",
+                   help="Raw string appended verbatim to the configure invocation")
+
+    return p.parse_args()
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Main
+# ──────────────────────────────────────────────────────────────────────
+
+def main() -> None:
+    args = parse_args()
+    root = Path.cwd()
+    deps_prefix = root / "deps"
+    ensure_dir(deps_prefix)
+
+    # ── Build dependencies ──────────────────────────────────────────
+    if not args.skip_deps:
+        print("\n" + "=" * 60)
+        print("Building dependencies")
+        print("=" * 60)
+
+        # GMP  (required)
+        if not args.skip_gmp and not args.with_gmp:
+            build_gmp(deps_prefix, args.jobs)
+
+        # MPFR (required)
+        if not args.skip_mpfr and not args.with_mpfr:
+            gmp_pfx = Path(args.with_gmp) if args.with_gmp else deps_prefix
+            build_mpfr(deps_prefix, gmp_pfx, args.jobs)
+
+        # FFTW (optional but recommended)
+        if not args.skip_fftw and not args.with_fftw:
+            build_fftw(deps_prefix, args.jobs)
+
+        # OpenSSL (required by Grid for SHA256)
+        if not args.skip_openssl and not args.with_openssl:
+            build_openssl(deps_prefix, args.jobs)
+
+        # HDF5 (optional)
+        if not args.skip_hdf5 and not args.with_hdf5:
+            build_hdf5(deps_prefix, args.jobs)
+
+        # LIME / c-lime (optional, for ILDG/SciDAC file format)
+        if not args.skip_lime and not args.with_lime:
+            build_lime(deps_prefix, args.jobs)
+
+        # libunwind (optional, for backtraces)
+        if not args.skip_libunwind and not args.with_unwind:
+            build_libunwind(deps_prefix, args.jobs)
+    else:
+        print("--skip-deps: skipping all dependency builds")
+
+    # ── Install Nim ─────────────────────────────────────────────────
+    grid_install = root / "grid-install"
+    if not args.skip_nim:
+        print("\n" + "=" * 60)
+        print("Installing Nim")
+        print("=" * 60)
+        build_nim(grid_install, deps_prefix)
+
+    # ── Build Grid ──────────────────────────────────────────────────
+    print("\n" + "=" * 60)
+    print("Building Grid")
+    print("=" * 60)
+    build_grid(args, deps_prefix)
+
+
+if __name__ == "__main__":
+    main()

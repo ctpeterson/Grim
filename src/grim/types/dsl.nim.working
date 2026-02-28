@@ -1,0 +1,1805 @@
+#[ 
+  Grim: https://github.com/ctpeterson/Grim
+  Source file: src/grim/types/dsl.nim
+
+  Author: Curtis Taylor Peterson <curtistaylorpetersonwork@gmail.com>
+
+  MIT License
+  
+  Copyright (c) 2026 Grim
+  
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+  
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, 
+  WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN 
+  CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+]#
+
+import std/[macros, tables, sequtils, sets, strutils, math]
+
+import cpp
+import grid
+import field
+import stencil
+import view
+
+export cpp, grid, field, stencil, view
+
+header()
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Direction constants
+# ═══════════════════════════════════════════════════════════════════════════════
+
+type Direction* = distinct int
+
+const X* = Direction(0)
+const Y* = Direction(1)
+const Z* = Direction(2)
+const T* = Direction(3)
+
+proc `$`*(d: Direction): string =
+  case int(d)
+  of 0: "X"
+  of 1: "Y"
+  of 2: "Z"
+  of 3: "T"
+  else: "D" & $int(d)
+
+proc `==`*(a, b: Direction): bool {.borrow.}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Displacement type — a seq[int] representing a lattice shift vector
+# ═══════════════════════════════════════════════════════════════════════════════
+
+type Displacement* = seq[int]
+
+proc displacement*(d: Direction; k: int = 1): Displacement =
+  result = newSeq[int](nd)
+  result[int(d)] = k
+
+proc `+`*(d: Direction): Displacement = displacement(d, +1)
+proc `-`*(d: Direction): Displacement = displacement(d, -1)
+
+proc `*`*(k: int; d: Direction): Displacement = displacement(d, k)
+proc `*`*(d: Direction; k: int): Displacement = displacement(d, k)
+
+proc `+`*(a, b: Displacement): Displacement =
+  result = newSeq[int](nd)
+  for i in 0..<nd: result[i] = a[i] + b[i]
+
+proc `-`*(a, b: Displacement): Displacement =
+  result = newSeq[int](nd)
+  for i in 0..<nd: result[i] = a[i] - b[i]
+
+proc `*`*(k: int; a: Displacement): Displacement =
+  result = newSeq[int](nd)
+  for i in 0..<nd: result[i] = k * a[i]
+
+proc `-`*(a: Displacement): Displacement =
+  result = newSeq[int](nd)
+  for i in 0..<nd: result[i] = -a[i]
+
+# Runtime direction → displacement  (used when loop variable is int, not Direction)
+proc displacementFromInt*(d: int; k: int = 1): Displacement =
+  result = newSeq[int](nd)
+  result[d] = k
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Grid C++ bindings: PaddedCell.Exchange / PaddedCell.Extract
+#
+# Exchange: pad field from unpadded grid → padded grid  (+ MPI halo exchange)
+# Extract:  copy padded-grid field's interior → unpadded-grid field
+# ═══════════════════════════════════════════════════════════════════════════════
+
+macro genPadOps(name: untyped): untyped =
+  let nameStr = $name
+  let nameD = ident(nameStr & "D")
+  let nameF = ident(nameStr & "F")
+  result = newStmtList()
+  for t in [name, nameD, nameF]:
+    result.add quote do:
+      proc exchange*(cell: PaddedCell; src: `t`): `t`
+        {.importcpp: "#.Exchange(@)", grid.}
+      proc extract*(cell: PaddedCell; src: `t`): `t`
+        {.importcpp: "#.Extract(@)", grid.}
+
+genPadOps(LatticeReal)
+genPadOps(LatticeComplex)
+genPadOps(LatticeColorVector)
+genPadOps(LatticeSpinColorVector)
+genPadOps(LatticeColorMatrix)
+genPadOps(LatticeSpinColorMatrix)
+
+# Vector[T] gauge-field overloads: component-wise Exchange / Extract
+template exchange*[T](cell: PaddedCell; src: Vector[T]): untyped =
+  block:
+    var dst = newVector[T]()
+    dst.reserve(src.size())
+    for mu in 0.cint ..< src.size():
+      dst.push_back cell.exchange(src[mu])
+    dst
+
+template extract*[T](cell: PaddedCell; src: Vector[T]): untyped =
+  block:
+    var dst = newVector[T]()
+    dst.reserve(src.size())
+    for mu in 0.cint ..< src.size():
+      dst.push_back cell.extract(src[mu])
+    dst
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# AST helpers — recognise DSL-specific syntax nodes
+# ═══════════════════════════════════════════════════════════════════════════════
+
+proc isFixedRef(n: NimNode): bool =
+  n.kind == nnkCall and n.len >= 2 and
+    n[0].kind == nnkIdent and $n[0] == "fixed"
+
+proc isReadRef(n: NimNode): bool =
+  n.kind == nnkCall and n.len >= 2 and
+    n[0].kind == nnkIdent and $n[0] == "read"
+
+proc isWriteRef(n: NimNode): bool =
+  n.kind == nnkCall and n.len >= 2 and
+    n[0].kind == nnkIdent and $n[0] == "write"
+
+proc isDispatchBlock(n: NimNode): bool =
+  n.kind == nnkCall and n.len == 2 and
+    n[0].kind == nnkIdent and ($n[0] == "accelerator" or $n[0] == "host")
+
+proc extractFieldNames(node: NimNode): seq[NimNode] =
+  proc flatten(n: NimNode; into: var seq[NimNode]) =
+    if n.kind == nnkInfix and $n[0] == ",":
+      flatten(n[1], into)
+      flatten(n[2], into)
+    elif n.kind == nnkIdent:
+      into.add n
+    elif n.kind == nnkStmtList:
+      for child in n: flatten(child, into)
+  for i in 1..<node.len:
+    flatten(node[i], result)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Conformability validation — every bracket-accessed field in the kernel must
+# be declared in fixed:, read:, or write:
+# ═══════════════════════════════════════════════════════════════════════════════
+
+proc extractSiteVars(n: NimNode): HashSet[string] =
+  if n.kind == nnkForStmt and n.len >= 3:
+    let iterExpr = n[^2]
+    let isSites = (iterExpr.kind == nnkIdent and $iterExpr == "sites") or
+                  (iterExpr.kind == nnkCall and iterExpr.len >= 1 and
+                   iterExpr[0].kind == nnkIdent and $iterExpr[0] == "sites")
+    if isSites:
+      result.incl $n[0]
+  for child in n:
+    result = result + extractSiteVars(child)
+
+proc collectFieldRefsFromAST(n: NimNode; siteVars: HashSet[string];
+                              refs: var HashSet[string]) =
+  if n.kind == nnkBracketExpr:
+    let base = n[0]
+    let idx = n[^1]
+    var isSiteIndexed = false
+    if idx.kind == nnkIdent and $idx in siteVars:
+      isSiteIndexed = true
+    elif idx.kind == nnkInfix and $idx[0] == ">>" and
+         idx[1].kind == nnkIdent and $idx[1] in siteVars:
+      isSiteIndexed = true
+    if isSiteIndexed:
+      if base.kind == nnkIdent:
+        refs.incl $base
+      elif base.kind == nnkBracketExpr and base[0].kind == nnkIdent:
+        refs.incl $base[0]
+  for child in n:
+    collectFieldRefsFromAST(child, siteVars, refs)
+
+proc validateFieldRefs(dispatchBlocks: seq[NimNode];
+                       allDeclaredFields: HashSet[string]) =
+  for dblock in dispatchBlocks:
+    let body = dblock[1]
+    let siteVars = extractSiteVars(body)
+    var fieldRefs: HashSet[string]
+    collectFieldRefsFromAST(body, siteVars, fieldRefs)
+    for refName in fieldRefs:
+      if refName notin allDeclaredFields:
+        error("field '" & refName & "' is used inside the stencil " &
+              "kernel but not declared in fixed:, read:, or write:. " &
+              "All fields must be padded to the same grid for conformability.")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Shift collector — walks AST looking for  n >> shift  patterns and builds
+# a unique table of displacements plus the concrete seq[seq[int]] that will
+# be fed to GeneralLocalStencil at runtime.
+#
+# Three shift kinds:
+#   skConstant  — +T, T+X, etc. → 1 entry
+#   skSingleVar — +μ            → nd entries  (μ = 0 … nd-1)
+#   skMultiVar  — μ+ν           → nd^k entries
+# ═══════════════════════════════════════════════════════════════════════════════
+
+type ShiftKind = enum
+  skConstant
+  skSingleVar
+  skMultiVar
+
+type ShiftEntry = object
+  kind: ShiftKind
+  baseIndex: int        ## index into the flat shift array
+  varNames: seq[string] ## names of variable direction idents
+
+proc classifyShiftExpr(expr: NimNode; knownDirs: HashSet[string]):
+    tuple[kind: ShiftKind; vars: seq[string]] =
+  ## Count free direction variables in a displacement expression.
+  proc walk(n: NimNode; vars: var seq[string]; known: HashSet[string]) =
+    case n.kind
+    of nnkPrefix:
+      walk(n[1], vars, known)
+    of nnkInfix:
+      walk(n[1], vars, known)
+      walk(n[2], vars, known)
+    of nnkIdent:
+      let name = $n
+      if name notin known and name notin ["nd", "int"]:
+        if name notin vars: vars.add name
+    of nnkIntLit..nnkInt64Lit:
+      discard
+    of nnkCall:
+      for child in n: walk(child, vars, known)
+    else: discard
+  walk(expr, result.vars, knownDirs)
+  result.kind = case result.vars.len
+    of 0: skConstant
+    of 1: skSingleVar
+    else: skMultiVar
+
+proc substituteDir(expr: NimNode; varName: string; dirIdx: int): NimNode =
+  if expr.kind == nnkIdent and $expr == varName:
+    return newCall(ident"Direction", newIntLitNode(dirIdx))
+  result = copyNimNode(expr)
+  for child in expr:
+    result.add substituteDir(child, varName, dirIdx)
+
+proc substituteDirs(expr: NimNode; varNames: seq[string]; combo: seq[int]): NimNode =
+  result = expr
+  for i, v in varNames:
+    result = substituteDir(result, v, combo[i])
+
+proc collectShifts(n: NimNode; shiftMap: var Table[string, ShiftEntry];
+                   shiftList: var seq[NimNode]; knownDirs: HashSet[string]) =
+  ## Walk the AST and register every unique shift expression.
+  if n.kind == nnkInfix and $n[0] == ">>":
+    let shiftExpr = n[2]
+    let key = repr(shiftExpr)
+    if key notin shiftMap:
+      let (kind, vars) = classifyShiftExpr(shiftExpr, knownDirs)
+      case kind
+      of skConstant:
+        let idx = shiftList.len
+        shiftList.add shiftExpr
+        shiftMap[key] = ShiftEntry(kind: skConstant, baseIndex: idx, varNames: @[])
+      of skSingleVar:
+        let base = shiftList.len
+        for d in 0..<4:
+          shiftList.add substituteDir(shiftExpr, vars[0], d)
+        shiftMap[key] = ShiftEntry(kind: skSingleVar, baseIndex: base, varNames: vars)
+      of skMultiVar:
+        let base = shiftList.len
+        let nv = vars.len
+        proc enumerate(depth: int; combo: var seq[int]; expr: NimNode;
+                       vars: seq[string]; shiftList: var seq[NimNode]) =
+          if depth == vars.len:
+            shiftList.add substituteDirs(expr, vars, combo)
+          else:
+            for d in 0..<4:
+              combo[depth] = d
+              enumerate(depth + 1, combo, expr, vars, shiftList)
+        var combo = newSeq[int](nv)
+        enumerate(0, combo, shiftExpr, vars, shiftList)
+        shiftMap[key] = ShiftEntry(kind: skMultiVar, baseIndex: base, varNames: vars)
+  for child in n:
+    collectShifts(child, shiftMap, shiftList, knownDirs)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Build shift-index expression
+# ═══════════════════════════════════════════════════════════════════════════════
+
+proc buildIndexExpr(entry: ShiftEntry): NimNode =
+  case entry.kind
+  of skConstant:
+    return newIntLitNode(entry.baseIndex)
+  of skSingleVar:
+    let base = newIntLitNode(entry.baseIndex)
+    let v = ident(entry.varNames[0])
+    return infix(base, "+", newCall(ident"int", v))
+  of skMultiVar:
+    var expr = newIntLitNode(entry.baseIndex)
+    let nv = entry.varNames.len
+    for i, vn in entry.varNames:
+      let v = ident(vn)
+      var stride = 1
+      for j in (i + 1)..<nv: stride *= 4
+      let strideNode = newIntLitNode(stride)
+      expr = infix(expr, "+", infix(newCall(ident"int", v), "*", strideNode))
+    return expr
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Auto-depth: infer padding depth from shift expressions
+#
+# Walk each shift expression AST and extract the maximum absolute scaling
+# factor. For +T → 1, 2*Y → 2, -3*X → 3, T+X → 1, 2*μ-ν → 2.
+# The depth is the max across all components of all shifts.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+proc inferMaxDepth(shiftExprs: seq[NimNode]): int =
+  ## Compute the maximum absolute displacement component across all shifts.
+  ## Works at compile time on the shift expression ASTs.
+  ##
+  ## Returns at least 1 (even for an empty shift list).
+  result = 1
+
+  proc maxComponent(n: NimNode): int =
+    ## Analyse a single displacement expression and return its max |component|.
+    case n.kind
+    of nnkPrefix:
+      # +d or -d  → component magnitude = maxComponent(d)
+      return maxComponent(n[1])
+    of nnkInfix:
+      let op = $n[0]
+      if op == "*":
+        # k * d  or  d * k — one side is an int literal
+        if n[1].kind in {nnkIntLit..nnkInt64Lit}:
+          return abs(int(n[1].intVal)) * max(1, maxComponent(n[2]))
+        elif n[2].kind in {nnkIntLit..nnkInt64Lit}:
+          return abs(int(n[2].intVal)) * max(1, maxComponent(n[1]))
+        else:
+          return max(maxComponent(n[1]), maxComponent(n[2]))
+      elif op in ["+", "-"]:
+        # d1 + d2  or  d1 - d2 — components add in different directions
+        # but the worst case per-component is max of the two sub-expressions
+        return max(maxComponent(n[1]), maxComponent(n[2]))
+      else:
+        return 1
+    of nnkIdent:
+      return 1  # a direction variable → unit displacement
+    of nnkIntLit..nnkInt64Lit:
+      return abs(int(n.intVal))
+    of nnkCall:
+      # Direction(0) etc.
+      return 1
+    of nnkPar:
+      if n.len == 1: return maxComponent(n[0])
+      return 1
+    else:
+      return 1
+
+  for expr in shiftExprs:
+    let d = maxComponent(expr)
+    if d > result: result = d
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# fixSitesLoop — rewrite bare  `for n in sites`  →  `for n in sites(paddedGrid)`
+# ═══════════════════════════════════════════════════════════════════════════════
+
+proc fixSitesLoop(body: NimNode; paddedSym: NimNode): NimNode =
+  if body.kind == nnkForStmt and body.len >= 3:
+    let iterExpr = body[^2]
+    if iterExpr.kind == nnkIdent and $iterExpr == "sites":
+      result = copyNimTree(body)
+      result[^2] = newCall(ident"sites", paddedSym)
+      result[^1] = fixSitesLoop(body[^1], paddedSym)
+      return
+  result = copyNimNode(body)
+  for child in body:
+    result.add fixSitesLoop(child, paddedSym)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Core AST rewriter — transforms field[n >> shift] into stencil reads, etc.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+proc rewriteFieldAccess(
+  n: NimNode;
+  shiftMap: Table[string, ShiftEntry];
+  readFields: HashSet[string];
+  writeFields: HashSet[string];
+  stencilViewSym: NimNode;
+): NimNode =
+
+  # ── assignment: field[n] = val  or  field[mu][n] = val ─────────────
+  if n.kind == nnkAsgn and n.len == 2:
+    let lhs = n[0]
+    let rhs = rewriteFieldAccess(n[1], shiftMap, readFields,
+                                  writeFields, stencilViewSym)
+
+    # field[mu][n] = val  →  coalescedWrite(field_view[mu][n], val)
+    if lhs.kind == nnkBracketExpr and lhs[0].kind == nnkBracketExpr:
+      let inner = lhs[0]
+      let fieldName = if inner[0].kind == nnkIdent: $inner[0] else: ""
+      if fieldName in writeFields:
+        let muArg = inner[1]
+        let siteArg = lhs[1]
+        let viewIdent = ident(fieldName & "_view")
+        let muInt = newCall(ident"int", muArg)
+        return quote do:
+          coalescedWrite(`viewIdent`[`muInt`][`siteArg`], `rhs`)
+
+    # field[n] = val  →  coalescedWrite(field_view[n], val)
+    if lhs.kind == nnkBracketExpr and lhs.len == 2:
+      let fieldName = if lhs[0].kind == nnkIdent: $lhs[0] else: ""
+      if fieldName in writeFields:
+        let siteArg = lhs[1]
+        let viewIdent = ident(fieldName & "_view")
+        return quote do:
+          coalescedWrite(`viewIdent`[`siteArg`], `rhs`)
+
+    return newAssignment(
+      rewriteFieldAccess(lhs, shiftMap, readFields, writeFields, stencilViewSym),
+      rhs)
+
+  # ── chained bracket read: field[mu][n >> shift]  ────────────────────
+  if n.kind == nnkBracketExpr and n[0].kind == nnkBracketExpr:
+    let inner = n[0]
+    let fieldName = if inner[0].kind == nnkIdent: $inner[0] else: ""
+    let muArg = inner[1]
+    let siteExpr = n[1]
+
+    if fieldName in readFields:
+      let viewIdent = ident(fieldName & "_view")
+
+      if siteExpr.kind == nnkInfix and $siteExpr[0] == ">>":
+        let siteArg = siteExpr[1]
+        let shiftKey = repr(siteExpr[2])
+        if shiftKey in shiftMap:
+          let indexExpr = buildIndexExpr(shiftMap[shiftKey])
+          let muInt = newCall(ident"int", muArg)
+          return quote do:
+            block:
+              let se = `stencilViewSym`.entry(`indexExpr`, `siteArg`)
+              coalescedReadGeneralPermute(`viewIdent`[`muInt`][se.offset], se.permute, nd)
+
+      # No shift: field[mu][n] → read from view
+      let rewrittenSite = rewriteFieldAccess(
+        siteExpr, shiftMap, readFields, writeFields, stencilViewSym)
+      let muInt = newCall(ident"int", muArg)
+      return quote do:
+        `viewIdent`[`muInt`][`rewrittenSite`]
+
+    if fieldName in writeFields:
+      let viewIdent = ident(fieldName & "_view")
+      let rewrittenSite = rewriteFieldAccess(
+        siteExpr, shiftMap, readFields, writeFields, stencilViewSym)
+      let muInt = newCall(ident"int", muArg)
+      return quote do:
+        `viewIdent`[`muInt`][`rewrittenSite`]
+
+  # ── scalar bracket: field[n >> shift] ───────────────────────────────
+  if n.kind == nnkBracketExpr and n.len == 2:
+    let fieldName = if n[0].kind == nnkIdent: $n[0] else: ""
+    let siteExpr = n[1]
+
+    if fieldName in readFields:
+      let viewIdent = ident(fieldName & "_view")
+
+      if siteExpr.kind == nnkInfix and $siteExpr[0] == ">>":
+        let siteArg = siteExpr[1]
+        let shiftKey = repr(siteExpr[2])
+        if shiftKey in shiftMap:
+          let indexExpr = buildIndexExpr(shiftMap[shiftKey])
+          return quote do:
+            block:
+              let se = `stencilViewSym`.entry(`indexExpr`, `siteArg`)
+              coalescedReadGeneralPermute(`viewIdent`[se.offset], se.permute, nd)
+
+      # No shift: field[n] → view[n]
+      let rewrittenSite = rewriteFieldAccess(
+        siteExpr, shiftMap, readFields, writeFields, stencilViewSym)
+      return quote do:
+        `viewIdent`[`rewrittenSite`]
+
+    if fieldName in writeFields:
+      let viewIdent = ident(fieldName & "_view")
+      let rewrittenSite = rewriteFieldAccess(
+        siteExpr, shiftMap, readFields, writeFields, stencilViewSym)
+      return quote do:
+        `viewIdent`[`rewrittenSite`]
+
+  # ── compound assignment: field[n] += val ────────────────────────────
+  # Nim parses  `χ[n] += expr` as nnkCall(ident"+=", nnkBracketExpr(...), expr)
+  if n.kind == nnkCall and n.len == 3 and n[0].kind == nnkIdent and
+     $n[0] in ["+=", "-=", "*="]:
+    let opName = $n[0]
+    let lhs = n[1]
+    let rhs = rewriteFieldAccess(n[2], shiftMap, readFields,
+                                  writeFields, stencilViewSym)
+
+    # field[n] += val for write field → coalescedWrite(view[n], view[n] + val)
+    if lhs.kind == nnkBracketExpr and lhs.len == 2:
+      let fieldName = if lhs[0].kind == nnkIdent: $lhs[0] else: ""
+      if fieldName in writeFields:
+        let siteArg = lhs[1]
+        let viewIdent = ident(fieldName & "_view")
+        let arithOp = case opName
+          of "+=": "+"
+          of "-=": "-"
+          of "*=": "*"
+          else: "+"
+        let arithIdent = ident(arithOp)
+        return quote do:
+          coalescedWrite(`viewIdent`[`siteArg`],
+            `arithIdent`(`viewIdent`[`siteArg`], `rhs`))
+
+  # ── generic recursion ────────────────────────────────────────────────
+  result = copyNimNode(n)
+  for child in n:
+    result.add rewriteFieldAccess(child, shiftMap, readFields,
+                                   writeFields, stencilViewSym)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# parseStencilBody — extract field bindings, dispatch blocks from the DSL body
+# ═══════════════════════════════════════════════════════════════════════════════
+
+type ParsedBody = object
+  fixedFieldNodes: seq[NimNode]
+  readFieldNodes: seq[NimNode]
+  writeFieldNodes: seq[NimNode]
+  dispatchBlocks: seq[NimNode]
+
+proc parseStencilBody(body: NimNode): ParsedBody =
+  for stmt in body:
+    if stmt.isFixedRef:
+      result.fixedFieldNodes.add extractFieldNames(stmt)
+    elif stmt.isReadRef:
+      result.readFieldNodes.add extractFieldNames(stmt)
+    elif stmt.isWriteRef:
+      result.writeFieldNodes.add extractFieldNames(stmt)
+    elif stmt.isDispatchBlock:
+      result.dispatchBlocks.add stmt
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# parseDirectionGenerics — extract direction generic parameters from name node
+#
+# Handles:
+#   hop                        → (hop, [])
+#   plaquette[μ, ν: Direction] → (plaquette, [μ, ν])
+#   Dslash_dir[μ: Direction]   → (Dslash_dir, [μ])
+# ═══════════════════════════════════════════════════════════════════════════════
+
+proc parseDirectionGenerics(nameNode: NimNode):
+    tuple[name: NimNode; dirParams: seq[NimNode]] =
+  if nameNode.kind == nnkBracketExpr:
+    result.name = nameNode[0]
+    for i in 1..<nameNode.len:
+      let param = nameNode[i]
+      if param.kind == nnkExprColonExpr:
+        # μ, ν: Direction  or  μ: Direction
+        let names = param[0]
+        if names.kind == nnkTupleConstr:
+          for j in 0..<names.len:
+            result.dirParams.add names[j]
+        else:
+          result.dirParams.add names
+      elif param.kind == nnkIdent:
+        result.dirParams.add param
+  else:
+    result.name = nameNode
+    result.dirParams = @[]
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Shared codegen helpers for both anonymous and named stencil macros
+# ═══════════════════════════════════════════════════════════════════════════════
+
+proc emitDispatchBlock(dblock: NimNode;
+                       shiftMap: Table[string, ShiftEntry];
+                       allReadNodes: seq[NimNode];
+                       writeFieldNodes: seq[NimNode];
+                       allReadNames: seq[string];
+                       writeFieldNames: seq[string];
+                       stencilSym, stencilViewSym, paddedSym: NimNode;
+                       hasShifts: bool;
+                       paddedMap: Table[string, NimNode]): NimNode =
+  let dispatchKind = $dblock[0]
+  let innerBody = dblock[1]
+  var viewSetup = newStmtList()
+
+  if hasShifts:
+    viewSetup.add quote do:
+      var `stencilViewSym` = `stencilSym`.view(AcceleratorRead)
+
+  for fieldNode in allReadNodes:
+    let viewIdent = ident($fieldNode & "_view")
+    let paddedIdent = paddedMap[$fieldNode]
+    viewSetup.add quote do:
+      var `viewIdent` = `paddedIdent`.view(AcceleratorRead)
+
+  for fieldNode in writeFieldNodes:
+    let viewIdent = ident($fieldNode & "_view")
+    let paddedIdent = paddedMap[$fieldNode]
+    let mode = if dispatchKind == "accelerator": ident"AcceleratorWrite"
+               else: ident"HostWrite"
+    viewSetup.add quote do:
+      var `viewIdent` = `paddedIdent`.view(`mode`)
+
+  let readFieldSet = allReadNames.toHashSet
+  let writeFieldSet = writeFieldNames.toHashSet
+  let rewrittenBody = rewriteFieldAccess(
+    innerBody, shiftMap, readFieldSet, writeFieldSet, stencilViewSym)
+  let fixedBody = fixSitesLoop(rewrittenBody, paddedSym)
+  let dispatchIdent = ident(dispatchKind)
+
+  result = quote do:
+    `dispatchIdent`:
+      `viewSetup`
+      `fixedBody`
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# The stencil macro — anonymous form
+#
+# Two overloads:
+#   stencil(lattice, depth = N):  body   — explicit depth
+#   stencil(lattice):             body   — auto-detect depth from shifts
+# ═══════════════════════════════════════════════════════════════════════════════
+
+proc stencilAnonymousImpl(gridVar, depthExpr: NimNode; body: NimNode): NimNode =
+  let cellSym = genSym(nskVar, "cell")
+  let paddedSym = genSym(nskLet, "paddedGrid")
+  let stencilSym = genSym(nskVar, "stencilObj")
+  let stencilViewSym = genSym(nskVar, "stencilView")
+  let knownDirs = ["X", "Y", "Z", "T"].toHashSet
+
+  let parsed = parseStencilBody(body)
+
+  let readFieldNames = parsed.readFieldNodes.mapIt($it)
+  let writeFieldNames = parsed.writeFieldNodes.mapIt($it)
+
+  let allReadNodes = parsed.fixedFieldNodes & parsed.readFieldNodes
+  let allReadNames = allReadNodes.mapIt($it)
+
+  let allDeclaredFields = (allReadNames & writeFieldNames).toHashSet
+  validateFieldRefs(parsed.dispatchBlocks, allDeclaredFields)
+
+  var shiftMap = initTable[string, ShiftEntry]()
+  var shiftExprs: seq[NimNode]
+  for dblock in parsed.dispatchBlocks:
+    collectShifts(dblock[1], shiftMap, shiftExprs, knownDirs)
+
+  # Determine depth: use explicit if given, otherwise infer from shifts
+  let depthVal = if depthExpr.kind == nnkEmpty:
+    newIntLitNode(inferMaxDepth(shiftExprs))
+  elif depthExpr.kind == nnkExprEqExpr:
+    depthExpr[1]
+  else:
+    depthExpr
+
+  result = newStmtList()
+
+  # 1. PaddedCell + padded grid
+  result.add quote do:
+    var `cellSym` = `gridVar`.newPaddedCell(depth = cint(`depthVal`))
+    let `paddedSym` = `cellSym`.paddedGrid()
+
+  # 2. Build shift array + GeneralLocalStencil
+  if shiftExprs.len > 0:
+    let numShifts = newIntLitNode(shiftExprs.len)
+    let shiftsArraySym = genSym(nskVar, "grimShifts")
+    var shiftSetup = newStmtList()
+    shiftSetup.add quote do:
+      var `shiftsArraySym` = newSeq[seq[int]](`numShifts`)
+    for i, expr in shiftExprs:
+      let idx = newIntLitNode(i)
+      shiftSetup.add quote do:
+        `shiftsArraySym`[`idx`] = `expr`
+    shiftSetup.add quote do:
+      var `stencilSym` = `paddedSym`.newGeneralLocalStencil(`shiftsArraySym`)
+    result.add shiftSetup
+
+  # 3. Exchange (pad) read fields
+  var paddedMap = initTable[string, NimNode]()
+  for fieldNode in allReadNodes:
+    let paddedIdent = ident($fieldNode & "_padded")
+    paddedMap[$fieldNode] = paddedIdent
+    result.add quote do:
+      var `paddedIdent` = `cellSym`.exchange(`fieldNode`)
+
+  # 4. Allocate write fields on padded grid
+  for fieldNode in parsed.writeFieldNodes:
+    let paddedIdent = ident($fieldNode & "_padded")
+    paddedMap[$fieldNode] = paddedIdent
+    result.add quote do:
+      var `paddedIdent` = `cellSym`.exchange(`fieldNode`)
+
+  # 5. Dispatch blocks
+  for dblock in parsed.dispatchBlocks:
+    result.add emitDispatchBlock(dblock, shiftMap, allReadNodes,
+      parsed.writeFieldNodes, allReadNames, writeFieldNames,
+      stencilSym, stencilViewSym, paddedSym, shiftExprs.len > 0,
+      paddedMap)
+
+  # 6. Extract (unpad) write fields
+  for fieldNode in parsed.writeFieldNodes:
+    let paddedIdent = paddedMap[$fieldNode]
+    result.add quote do:
+      `fieldNode` = `cellSym`.extract(`paddedIdent`)
+
+  result = newBlockStmt(result)
+
+  when defined(dslDebug):
+    echo "=== stencil (anon) macro expansion ==="
+    echo repr(result)
+    echo "=== end ==="
+
+# 3-arg: stencil(lattice, depth = N): body
+macro stencil*(gridVar: untyped; depth: untyped; body: untyped): untyped =
+  stencilAnonymousImpl(gridVar, depth, body)
+
+# 2-arg: either anonymous auto-depth  OR  named stencil
+# Both are (untyped; untyped) so we merge and dispatch on AST structure.
+#
+#   stencil(lattice):              — first arg is ident → anonymous auto-depth
+#   stencil hop(lattice):          — first arg is call  → named stencil
+#   stencil hop[μ: Direction](l):  — first arg is call with bracket name → named + dir generics
+macro stencil*(firstArg: untyped; body: untyped): untyped =
+  # Dispatch: if firstArg is a simple identifier, treat as anonymous auto-depth.
+  # Otherwise it's a named stencil invocation: hop(grid) / hop(grid, depth=N)
+  if firstArg.kind in {nnkIdent, nnkDotExpr, nnkSym}:
+    return stencilAnonymousImpl(firstArg, newEmptyNode(), body)
+
+  # ── Named stencil path ─────────────────────────────────────────────
+  let nameCall = firstArg
+
+  # ── Parse name + direction generics ───────────────────────────────────
+  let rawName = nameCall[0]
+  let (stencilName, dirParams) = parseDirectionGenerics(rawName)
+
+  # Parse grid and optional depth from the call args
+  var gridVar: NimNode
+  var depthExpr: NimNode = newEmptyNode()
+
+  if nameCall.len == 2:
+    # stencil hop(lattice): — no depth, just grid
+    gridVar = nameCall[1]
+  elif nameCall.len >= 3:
+    # stencil hop(lattice, depth = 1): — grid + depth
+    gridVar = nameCall[1]
+    depthExpr = nameCall[2]
+  else:
+    error("Named stencil requires at least a grid argument")
+
+  let cellSym = genSym(nskVar, "cell")
+  let paddedSym = genSym(nskLet, "paddedGrid")
+  let stencilSym = genSym(nskVar, "stencilObj")
+  let stencilViewSym = genSym(nskVar, "stencilView")
+
+  # Known constant directions — direction generic params are NOT added
+  # (they are variable directions, like loop vars)
+  let knownDirs = ["X", "Y", "Z", "T"].toHashSet
+
+  let parsed = parseStencilBody(body)
+  let fixedFieldNames = parsed.fixedFieldNodes.mapIt($it)
+  let readFieldNames = parsed.readFieldNodes.mapIt($it)
+  let writeFieldNames = parsed.writeFieldNodes.mapIt($it)
+  let allReadNames = fixedFieldNames & readFieldNames
+
+  let allDeclaredFields = (fixedFieldNames & readFieldNames & writeFieldNames).toHashSet
+  validateFieldRefs(parsed.dispatchBlocks, allDeclaredFields)
+
+  # Collect shifts — direction generic params treated as variable directions
+  var shiftMap = initTable[string, ShiftEntry]()
+  var shiftExprs: seq[NimNode]
+  for dblock in parsed.dispatchBlocks:
+    collectShifts(dblock[1], shiftMap, shiftExprs, knownDirs)
+
+  # Determine depth
+  let depthVal = if depthExpr.kind == nnkEmpty:
+    newIntLitNode(inferMaxDepth(shiftExprs))
+  elif depthExpr.kind == nnkExprEqExpr:
+    depthExpr[1]
+  else:
+    depthExpr
+
+  # ── Setup block (runs once at definition) ─────────────────────────────
+  var setup = newStmtList()
+
+  setup.add quote do:
+    var `cellSym` = `gridVar`.newPaddedCell(depth = cint(`depthVal`))
+    let `paddedSym` = `cellSym`.paddedGrid()
+
+  # For direction-generic stencils, shifts depend on the direction parameters
+  # and must be built at each call. For non-generic stencils, build once at setup.
+  let hasDirParams = dirParams.len > 0
+
+  if shiftExprs.len > 0 and not hasDirParams:
+    let numShifts = newIntLitNode(shiftExprs.len)
+    let shiftsArraySym = genSym(nskVar, "grimShifts")
+    var shiftSetup = newStmtList()
+    shiftSetup.add quote do:
+      var `shiftsArraySym` = newSeq[seq[int]](`numShifts`)
+    for i, expr in shiftExprs:
+      let idx = newIntLitNode(i)
+      shiftSetup.add quote do:
+        `shiftsArraySym`[`idx`] = `expr`
+    shiftSetup.add quote do:
+      var `stencilSym` = `paddedSym`.newGeneralLocalStencil(`shiftsArraySym`)
+    setup.add shiftSetup
+
+  # Pre-allocate padded buffers for fixed fields — pad immediately (includes halo)
+  # Use genSym to avoid name collisions between multiple named stencils.
+  var paddedMap = initTable[string, NimNode]()
+  for fieldNode in parsed.fixedFieldNodes:
+    let paddedIdent = genSym(nskVar, $fieldNode & "_padded")
+    paddedMap[$fieldNode] = paddedIdent
+    setup.add quote do:
+      var `paddedIdent` = `cellSym`.exchange(`fieldNode`)
+
+  # NOTE: read/write padded buffers are created in the apply body,
+  # because when parameterized, those fields are proc parameters
+  # and don't exist at setup time.
+
+  # ── Apply body (runs each call) ──────────────────────────────────────
+  var applyBody = newStmtList()
+
+  # For direction-generic stencils, build shifts at each call
+  if shiftExprs.len > 0 and hasDirParams:
+    let numShifts = newIntLitNode(shiftExprs.len)
+    let shiftsArraySym = genSym(nskVar, "grimShifts")
+    var shiftSetup = newStmtList()
+    shiftSetup.add quote do:
+      var `shiftsArraySym` = newSeq[seq[int]](`numShifts`)
+    for i, expr in shiftExprs:
+      let idx = newIntLitNode(i)
+      shiftSetup.add quote do:
+        `shiftsArraySym`[`idx`] = `expr`
+    shiftSetup.add quote do:
+      var `stencilSym` = `paddedSym`.newGeneralLocalStencil(`shiftsArraySym`)
+    applyBody.add shiftSetup
+
+  # Pad read fields each call (creates _padded variables)
+  for fieldNode in parsed.readFieldNodes:
+    let paddedIdent = ident($fieldNode & "_padded")
+    paddedMap[$fieldNode] = paddedIdent
+    applyBody.add quote do:
+      var `paddedIdent` = `cellSym`.exchange(`fieldNode`)
+
+  # Pad write fields each call (allocates padded buffer of correct type)
+  for fieldNode in parsed.writeFieldNodes:
+    let paddedIdent = ident($fieldNode & "_padded")
+    paddedMap[$fieldNode] = paddedIdent
+    applyBody.add quote do:
+      var `paddedIdent` = `cellSym`.exchange(`fieldNode`)
+
+  # Dispatch blocks
+  let allReadNodes = parsed.fixedFieldNodes & parsed.readFieldNodes
+  for dblock in parsed.dispatchBlocks:
+    applyBody.add emitDispatchBlock(dblock, shiftMap, allReadNodes,
+      parsed.writeFieldNodes, allReadNames, writeFieldNames,
+      stencilSym, stencilViewSym, paddedSym, shiftExprs.len > 0,
+      paddedMap)
+
+  # Unpad write fields
+  for fieldNode in parsed.writeFieldNodes:
+    let paddedIdent = paddedMap[$fieldNode]
+    applyBody.add quote do:
+      `fieldNode` = `cellSym`.extract(`paddedIdent`)
+
+  # ── Generate callable templates ─────────────────────────────────────
+  # We use templates rather than procs to avoid closure environments.
+  # C++ types like PaddedCell and GeneralLocalStencil lack default
+  # constructors, so they cannot be stored in a Nim closure env struct.
+  # Wrap applyBody in a block to scope local vars (prevents redefinition
+  # when the template is called multiple times in the same scope).
+  let scopedApplyBody = newBlockStmt(applyBody)
+  let hasFieldParams = parsed.readFieldNodes.len + parsed.writeFieldNodes.len > 0
+
+  result = newStmtList()
+  result.add setup
+
+  if hasFieldParams or hasDirParams:
+    # Build template with parameters: direction params first, then read fields, then write fields
+    var params = @[newEmptyNode()]  # void return
+
+    for dp in dirParams:
+      params.add newIdentDefs(dp, ident"Direction")
+
+    for fieldNode in parsed.readFieldNodes:
+      params.add newIdentDefs(fieldNode, ident"untyped")
+
+    for fieldNode in parsed.writeFieldNodes:
+      params.add newIdentDefs(fieldNode, ident"untyped")
+
+    var tmpl = newNimNode(nnkTemplateDef)
+    tmpl.add stencilName          # name
+    tmpl.add newEmptyNode()       # terms (empty)
+    tmpl.add newEmptyNode()       # generics (empty)
+    tmpl.add newNimNode(nnkFormalParams).add(params)  # params
+    tmpl.add newNimNode(nnkPragma).add(ident"dirty")  # pragmas: {.dirty.}
+    tmpl.add newEmptyNode()       # reserved
+    tmpl.add scopedApplyBody        # body
+
+    result.add tmpl
+  else:
+    # No-arg template: captures fields from definition scope
+    result.add quote do:
+      template `stencilName`() {.dirty.} =
+        `scopedApplyBody`
+
+  when defined(dslDebug):
+    echo "=== stencil (named) macro expansion ==="
+    echo repr(result)
+    echo "=== end ==="
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Grid C++ bindings needed for numerical testing
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Fill a real lattice field with the coordinate in direction mu.
+# After LatticeCoordinate(field, 2), site (x,y,z,t) has value z.
+proc latticeCoordinate*(field: var LatticeRealD; mu: cint)
+  {.importcpp: "Grid::LatticeCoordinate(@)", grid.}
+proc latticeCoordinate*(field: var LatticeComplexD; mu: cint)
+  {.importcpp: "Grid::LatticeCoordinate(@)", grid.}
+proc latticeCoordinate*(field: var LatticeRealF; mu: cint)
+  {.importcpp: "Grid::LatticeCoordinate(@)", grid.}
+proc latticeCoordinate*(field: var LatticeComplexF; mu: cint)
+  {.importcpp: "Grid::LatticeCoordinate(@)", grid.}
+
+# Global L2 norm squared: sum over all sites of |field(x)|^2
+proc norm2*(field: LatticeRealD): cdouble
+  {.importcpp: "Grid::norm2(@)", grid.}
+proc norm2*(field: LatticeComplexD): cdouble
+  {.importcpp: "Grid::norm2(@)", grid.}
+proc norm2*(field: LatticeRealF): cdouble
+  {.importcpp: "Grid::norm2(@)", grid.}
+proc norm2*(field: LatticeComplexF): cdouble
+  {.importcpp: "Grid::norm2(@)", grid.}
+proc norm2*(field: LatticeColorMatrixD): cdouble
+  {.importcpp: "Grid::norm2(@)", grid.}
+
+# Set field to identity (for color matrices)
+proc setToOne*(field: var LatticeColorMatrixD)
+  {.importcpp: "# = 1.0", grid.}
+
+# Lattice-level arithmetic: field - field
+proc `-`*(a, b: LatticeComplexD): LatticeComplexD
+  {.importcpp: "(# - #)", grid.}
+proc `-`*(a, b: LatticeRealD): LatticeRealD
+  {.importcpp: "(# - #)", grid.}
+proc `-`*(a, b: LatticeColorMatrixD): LatticeColorMatrixD
+  {.importcpp: "(# - #)", grid.}
+
+# Lattice-level addition
+proc `+`*(a, b: LatticeColorMatrixD): LatticeColorMatrixD
+  {.importcpp: "(# + #)", grid.}
+
+# Lattice-level multiplication (matrix * matrix)
+proc `*`*(a, b: LatticeColorMatrixD): LatticeColorMatrixD
+  {.importcpp: "(# * #)", grid.}
+
+# Lattice-level assignment from scalar
+proc setToZero*(field: var LatticeComplexD)
+  {.importcpp: "# = Grid::Zero()", grid.}
+proc setToZero*(field: var LatticeRealD)
+  {.importcpp: "# = Grid::Zero()", grid.}
+proc setToZero*(field: var LatticeColorMatrixD)
+  {.importcpp: "# = Grid::Zero()", grid.}
+
+# GridParallelRNG for random field fills
+type GridParallelRNG* {.importcpp: "Grid::GridParallelRNG", grid.} = object
+
+proc newGridParallelRNG*(grid: ptr Cartesian): GridParallelRNG
+  {.importcpp: "Grid::GridParallelRNG(@)", grid, constructor.}
+
+template newGridParallelRNG*(grid: var Cartesian): untyped =
+  newGridParallelRNG(addr grid)
+
+proc seedFixedIntegers*(rng: var GridParallelRNG; seeds: Vector[cint])
+  {.importcpp: "#.SeedFixedIntegers(@)", grid.}
+
+proc random*(rng: var GridParallelRNG; field: var LatticeRealD)
+  {.importcpp: "Grid::random(@)", grid.}
+proc random*(rng: var GridParallelRNG; field: var LatticeComplexD)
+  {.importcpp: "Grid::random(@)", grid.}
+proc random*(rng: var GridParallelRNG; field: var LatticeColorMatrixD)
+  {.importcpp: "Grid::random(@)", grid.}
+
+# SU(3) cold configuration (unit gauge)
+proc suColdConfiguration*(field: var Vector[LatticeColorMatrixD])
+  {.importcpp: "Grid::SU<3>::ColdConfiguration(@)", grid.}
+
+# Cshift for reference comparison (Grid's built-in circular shift)
+proc cshift*(field: LatticeComplexD; mu: cint; disp: cint): LatticeComplexD
+  {.importcpp: "Grid::Cshift(@)", grid.}
+proc cshift*(field: LatticeRealD; mu: cint; disp: cint): LatticeRealD
+  {.importcpp: "Grid::Cshift(@)", grid.}
+proc cshift*(field: LatticeColorMatrixD; mu: cint; disp: cint): LatticeColorMatrixD
+  {.importcpp: "Grid::Cshift(@)", grid.}
+
+# Lattice dimensions
+proc latt*(grid: ptr Cartesian): Coordinate
+  {.importcpp: "#->FullDimensions()", grid.}
+
+proc `[]`*(c: Coordinate; i: cint): cint
+  {.importcpp: "#[#]", grid.}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+when isMainModule:
+  var numPassed = 0
+  var numFailed = 0
+
+  template check(name: string; cond: bool) =
+    if cond:
+      print "  ✓ ", name
+      inc numPassed
+    else:
+      print "  ✗ FAIL: ", name
+      inc numFailed
+
+  grid:
+    var lattice = newCartesian()
+    let L = (addr lattice).latt()
+
+    # Seed RNG deterministically
+    var rng = lattice.newGridParallelRNG()
+    var seeds = newVector[cint]()
+    for i in 0.cint..<4.cint: seeds.push_back(i + 1)
+    rng.seedFixedIntegers(seeds)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # DIAGNOSTIC: Isolate where the bug is
+    # ─────────────────────────────────────────────────────────────────────
+    print "=== Diagnostic Tests ==="
+
+    var phi0 = lattice.newComplexField()
+    var psi0 = lattice.newComplexField()
+    latticeCoordinate(phi0, 3)  # fill with T-coordinate
+
+    # Diag A: Exchange/Extract round-trip
+    block:
+      var cell = lattice.newPaddedCell(depth = 1)
+      let pGrid = cell.paddedGrid()
+      print "  oSites(lattice):", lattice.oSites, "oSites(padded):", pGrid[].oSites
+      var phi0_padded = cell.exchange(phi0)
+      var phi0_back = cell.extract(phi0_padded)
+      let errA = norm2(phi0_back - phi0)
+      check("Diag A: Exchange/Extract round-trip (err=" & $errA & ")", errA < 1.0e-20)
+
+    # Diag B: View read/write round-trip (no stencil)
+    block:
+      var cell = lattice.newPaddedCell(depth = 1)
+      let pGrid = cell.paddedGrid()
+      var phi0_padded = cell.exchange(phi0)
+      var tmp_padded = cell.exchange(psi0)
+      accelerator:
+        var phiV = phi0_padded.view(AcceleratorRead)
+        var tmpV = tmp_padded.view(AcceleratorWrite)
+        for n in sites(pGrid):
+          coalescedWrite(tmpV[n], coalescedReadGeneralPermute(phiV[n], 0'u8, nd))
+      var result = cell.extract(tmp_padded)
+      let errB = norm2(result - phi0)
+      check("Diag B: View read/write round-trip (err=" & $errB & ")", errB < 1.0e-20)
+
+    # Diag C: Stencil entry inspection — check offsets differ from site idx
+    block:
+      var cell = lattice.newPaddedCell(depth = 1)
+      let pGrid = cell.paddedGrid()
+      var shifts = @[@[0, 0, 0, 1]]  # +T
+      var stencilObj = pGrid.newGeneralLocalStencil(shifts)
+      var nSame: int = 0
+      var nDiff: int = 0
+      accelerator:
+        var sv = stencilObj.view(AcceleratorRead)
+        for n in sites(pGrid):
+          let se = sv.entry(0, n)
+          {.emit: ["if (", se, "->_offset == ", n, ") { ++", nSame, "; } else { ++", nDiff, "; }"].}
+      print "  Stencil entries: same_as_self=", nSame, " different=", nDiff
+      check("Diag C: stencil shifts sites (nDiff > 0)", nDiff > 0)
+
+    # Diag D: Manual stencil (the original failing test)
+    block:
+      var cell = lattice.newPaddedCell(depth = 1)
+      let pGrid = cell.paddedGrid()
+      var phi0_padded = cell.exchange(phi0)
+      var psi0_padded = cell.exchange(psi0)
+      var shifts = @[@[0, 0, 0, 1]]  # +T
+      var stencilObj = pGrid.newGeneralLocalStencil(shifts)
+      accelerator:
+        var sv = stencilObj.view(AcceleratorRead)
+        var phiV = phi0_padded.view(AcceleratorRead)
+        var psiV = psi0_padded.view(AcceleratorWrite)
+        for n in sites(pGrid):
+          let se = sv.entry(0, n)
+          let shifted = coalescedReadGeneralPermute(phiV[se.offset], se.permute, nd)
+          coalescedWrite(psiV[n], shifted)
+      psi0 = cell.extract(psi0_padded)
+    let psi0Ref = cshift(phi0, 3, 1)
+    let err0 = norm2(psi0 - psi0Ref)
+    check("Diag D: manual PaddedCell stencil +T (err=" & $err0 & ")", err0 < 1.0e-20)
+
+    # Diag E: What IS psi0? Is it phi0 (identity) or something else?
+    let errVsPhi = norm2(psi0 - phi0)
+    print "  norm2(psi0 - phi0) =", errVsPhi, " (0 means stencil was identity)"
+    print "  norm2(psi0 - cshift) =", err0, " (0 means stencil shifted correctly)"
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TEST 1: Numerical correctness — constant shift +T
+    # ─────────────────────────────────────────────────────────────────────
+    print "=== Test 1: Numerical correctness — constant shift +T ==="
+
+    var phi = lattice.newComplexField()
+    var psi = lattice.newComplexField()
+    latticeCoordinate(phi, 3)
+
+    stencil(lattice, depth = 1):
+      read: phi
+      write: psi
+      accelerator:
+        for n in sites:
+          psi[n] = phi[n >> +T]
+
+    var psiRef = cshift(phi, 3, 1)
+    var diff = psi - psiRef
+    let err1 = norm2(diff)
+    check("shift +T matches Cshift (err=" & $err1 & ")", err1 < 1.0e-20)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TEST 2: Numerical correctness — constant shift -X
+    # ─────────────────────────────────────────────────────────────────────
+    print "=== Test 2: Numerical correctness — constant shift -X ==="
+
+    latticeCoordinate(phi, 0)
+
+    stencil(lattice, depth = 1):
+      read: phi
+      write: psi
+      accelerator:
+        for n in sites:
+          psi[n] = phi[n >> -X]
+
+    psiRef = cshift(phi, 0, -1)
+    diff = psi - psiRef
+    let err2 = norm2(diff)
+    check("shift -X matches Cshift (err=" & $err2 & ")", err2 < 1.0e-20)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TEST 3: Direction-loop variable shifts ±μ
+    # ─────────────────────────────────────────────────────────────────────
+    print "=== Test 3: Direction loop ±μ on gauge field ==="
+
+    var U = lattice.newGaugeField()
+    var W = lattice.newGaugeField()
+
+    for mu in 0.cint..<cint(nd):
+      rng.random(U[mu])
+
+    stencil(lattice, depth = 1):
+      read: U
+      write: W
+      accelerator:
+        for n in sites:
+          for mu in 0..<nd:
+            W[mu][n] = U[mu][n >> +mu] - U[mu][n >> -mu]
+
+    var maxErr3: cdouble = 0.0
+    for mu in 0.cint..<cint(nd):
+      let fwd = cshift(U[mu], mu, 1)
+      let bwd = cshift(U[mu], mu, -1)
+      let refMu = fwd - bwd
+      let errMu = norm2(W[mu] - refMu)
+      if errMu > maxErr3: maxErr3 = errMu
+    check("±μ gauge shift matches Cshift (maxErr=" & $maxErr3 & ")", maxErr3 < 1.0e-20)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TEST 4: Compound constant shift T+X (diagonal)
+    # ─────────────────────────────────────────────────────────────────────
+    print "=== Test 4: Compound constant shift +(T+X) ==="
+
+    var alpha = lattice.newComplexField()
+    var beta = lattice.newComplexField()
+    rng.random(alpha)
+
+    stencil(lattice, depth = 1):
+      read: alpha
+      write: beta
+      accelerator:
+        for n in sites:
+          beta[n] = alpha[n >> (+T + +X)]
+
+    var betaRef = cshift(cshift(alpha, 3, 1), 0, 1)
+    diff = beta - betaRef
+    let err4 = norm2(diff)
+    check("shift +(T+X) matches double Cshift (err=" & $err4 & ")", err4 < 1.0e-20)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TEST 5: Compound constant shift 2*Y (two steps in Y)
+    # ─────────────────────────────────────────────────────────────────────
+    print "=== Test 5: Compound constant shift 2*Y ==="
+
+    stencil(lattice, depth = 2):
+      read: alpha
+      write: beta
+      accelerator:
+        for n in sites:
+          beta[n] = alpha[n >> 2*Y]
+
+    betaRef = cshift(cshift(alpha, 1, 1), 1, 1)
+    diff = beta - betaRef
+    let err5 = norm2(diff)
+    check("shift 2*Y matches double Cshift (err=" & $err5 & ")", err5 < 1.0e-20)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TEST 6: fixed: keyword  — read-only field that isn't shifted
+    # ─────────────────────────────────────────────────────────────────────
+    print "=== Test 6: fixed: fields ==="
+
+    latticeCoordinate(phi, 3)
+    rng.random(alpha)
+
+    stencil(lattice, depth = 1):
+      fixed: phi
+      read: alpha
+      write: psi
+      accelerator:
+        for n in sites:
+          psi[n] = phi[n] * alpha[n >> +T]
+
+    betaRef = cshift(alpha, 3, 1)
+    var psi2 = lattice.newComplexField()
+    stencil(lattice, depth = 1):
+      read: alpha
+      write: psi2
+      accelerator:
+        for n in sites:
+          psi2[n] = alpha[n >> +T]
+    let errShiftPart = norm2(psi2 - betaRef)
+    check("fixed: field (shift part correct, err=" & $errShiftPart & ")", errShiftPart < 1.0e-20)
+    let psiNorm6 = norm2(psi)
+    check("fixed: field (result is nonzero, norm2=" & $psiNorm6 & ")", psiNorm6 > 0.0)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TEST 7: host: dispatch (thread_for instead of accelerator_for)
+    # ─────────────────────────────────────────────────────────────────────
+    print "=== Test 7: host: dispatch ==="
+
+    var gamma = lattice.newComplexField()
+    latticeCoordinate(phi, 2)
+
+    stencil(lattice, depth = 1):
+      read: phi
+      write: gamma
+      host:
+        for n in sites:
+          gamma[n] = phi[n >> +Z]
+
+    let gammaRef = cshift(phi, 2, 1)
+    let err7 = norm2(gamma - gammaRef)
+    check("host: dispatch shift +Z (err=" & $err7 & ")", err7 < 1.0e-20)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TEST 8: Multiple write fields
+    # ─────────────────────────────────────────────────────────────────────
+    print "=== Test 8: Multiple write fields ==="
+
+    var fwd_out = lattice.newComplexField()
+    var bwd_out = lattice.newComplexField()
+    rng.random(phi)
+
+    stencil(lattice, depth = 1):
+      read: phi
+      write: fwd_out
+      write: bwd_out
+      accelerator:
+        for n in sites:
+          fwd_out[n] = phi[n >> +Y]
+          bwd_out[n] = phi[n >> -Y]
+
+    let fwdRef = cshift(phi, 1, 1)
+    let bwdRef = cshift(phi, 1, -1)
+    let err8a = norm2(fwd_out - fwdRef)
+    let err8b = norm2(bwd_out - bwdRef)
+    check("multiple writes: fwd (err=" & $err8a & ")", err8a < 1.0e-20)
+    check("multiple writes: bwd (err=" & $err8b & ")", err8b < 1.0e-20)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TEST 9: Negative compound shift -2*Z
+    # ─────────────────────────────────────────────────────────────────────
+    print "=== Test 9: Negative compound shift -2*Z ==="
+
+    rng.random(alpha)
+
+    stencil(lattice, depth = 2):
+      read: alpha
+      write: beta
+      accelerator:
+        for n in sites:
+          beta[n] = alpha[n >> (-2)*Z]
+
+    betaRef = cshift(cshift(alpha, 2, -1), 2, -1)
+    let err9 = norm2(beta - betaRef)
+    check("shift -2*Z matches double Cshift (err=" & $err9 & ")", err9 < 1.0e-20)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TEST 10: MPI proof — compare norm2 which is a global reduction.
+    # ─────────────────────────────────────────────────────────────────────
+    print "=== Test 10: MPI global reduction proof ==="
+
+    var rankCount {.noinit.}: cint
+    {.emit: ["MPI_Comm_size(MPI_COMM_WORLD, &", rankCount, ");"].}
+    print "  Running on", rankCount, "MPI ranks"
+    print "  Lattice:", L[0], "x", L[1], "x", L[2], "x", L[3]
+
+    rng.random(phi)
+    let phiNorm = norm2(phi)
+    print "  norm2(phi) =", phiNorm, "(global reduction)"
+
+    stencil(lattice, depth = 1):
+      read: phi
+      write: psi
+      accelerator:
+        for n in sites:
+          psi[n] = phi[n >> +X]
+
+    let psiCshift = cshift(phi, 0, 1)
+    let err10 = norm2(psi - psiCshift)
+    check("MPI: shift +X on random data (err=" & $err10 & ")", err10 < 1.0e-20)
+
+    let psiNorm10 = norm2(psi)
+    let normDiff = abs(phiNorm - psiNorm10)
+    check("MPI: norm2 preserved under shift (diff=" & $normDiff & ")", normDiff < 1.0e-10)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TEST 11: Multi-variable shift μ+ν (compound constants)
+    # ─────────────────────────────────────────────────────────────────────
+    print "=== Test 11: Multi-variable shift μ+ν ==="
+
+    rng.random(phi)
+    var delta = lattice.newComplexField()
+
+    stencil(lattice, depth = 1):
+      read: phi
+      write: delta
+      accelerator:
+        for n in sites:
+          delta[n] = phi[n >> (+T + +X)]
+    var ref11 = cshift(cshift(phi, 3, 1), 0, 1)
+    var err11a = norm2(delta - ref11)
+    check("multi-var constant +T+X (err=" & $err11a & ")", err11a < 1.0e-20)
+
+    stencil(lattice, depth = 1):
+      read: phi
+      write: delta
+      accelerator:
+        for n in sites:
+          delta[n] = phi[n >> (-Y + +Z)]
+    ref11 = cshift(cshift(phi, 1, -1), 2, 1)
+    var err11b = norm2(delta - ref11)
+    check("compound constant -Y+Z (err=" & $err11b & ")", err11b < 1.0e-20)
+
+    stencil(lattice, depth = 1):
+      read: phi
+      write: delta
+      accelerator:
+        for n in sites:
+          delta[n] = phi[n >> (-X + -T)]
+    ref11 = cshift(cshift(phi, 0, -1), 3, -1)
+    let err11c = norm2(delta - ref11)
+    check("compound constant -X-T (err=" & $err11c & ")", err11c < 1.0e-20)
+
+    stencil(lattice, depth = 1):
+      read: phi
+      write: delta
+      accelerator:
+        for n in sites:
+          delta[n] = phi[n >> (+X + +Y + -Z)]
+    ref11 = cshift(cshift(cshift(phi, 0, 1), 1, 1), 2, -1)
+    let err11d = norm2(delta - ref11)
+    check("compound 3-way +X+Y-Z (err=" & $err11d & ")", err11d < 1.0e-20)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TEST 12: Negative direction-loop shift −μ (backward sweep)
+    # ─────────────────────────────────────────────────────────────────────
+    print "=== Test 12: Negative direction-loop shift −μ ==="
+
+    var maxErr12: cdouble = 0.0
+    for mu in 0..<nd:
+      stencil(lattice, depth = 1):
+        read: phi
+        write: delta
+        accelerator:
+          for n in sites:
+            delta[n] = phi[n >> -mu]
+
+      let ref12 = cshift(phi, cint(mu), -1)
+      let err12 = norm2(delta - ref12)
+      if err12 > maxErr12: maxErr12 = err12
+
+    check("negative loop shift −μ all 4 dirs (maxErr=" & $maxErr12 & ")", maxErr12 < 1.0e-20)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TEST 13: Auto-depth detection — depth=1 shift (no explicit depth)
+    # ─────────────────────────────────────────────────────────────────────
+    print "=== Test 13: Auto-depth — unit shift +T ==="
+
+    rng.random(phi)
+
+    stencil(lattice):
+      read: phi
+      write: psi
+      accelerator:
+        for n in sites:
+          psi[n] = phi[n >> +T]
+
+    let err13 = norm2(psi - cshift(phi, 3, 1))
+    check("auto-depth +T (err=" & $err13 & ")", err13 < 1.0e-20)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TEST 14: Auto-depth detection — depth=2 shift (no explicit depth)
+    # ─────────────────────────────────────────────────────────────────────
+    print "=== Test 14: Auto-depth — 2*Y without explicit depth ==="
+
+    stencil(lattice):
+      read: alpha
+      write: beta
+      accelerator:
+        for n in sites:
+          beta[n] = alpha[n >> 2*Y]
+
+    betaRef = cshift(cshift(alpha, 1, 1), 1, 1)
+    let err14 = norm2(beta - betaRef)
+    check("auto-depth 2*Y (err=" & $err14 & ")", err14 < 1.0e-20)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TEST 15: Auto-depth — mixed depth 1 and 2 shifts in same stencil
+    # ─────────────────────────────────────────────────────────────────────
+    print "=== Test 15: Auto-depth — mixed +T and 2*X ==="
+
+    var out15a = lattice.newComplexField()
+    var out15b = lattice.newComplexField()
+
+    stencil(lattice):
+      read: phi
+      write: out15a
+      write: out15b
+      accelerator:
+        for n in sites:
+          out15a[n] = phi[n >> +T]
+          out15b[n] = phi[n >> 2*X]
+
+    let err15a = norm2(out15a - cshift(phi, 3, 1))
+    let err15b = norm2(out15b - cshift(cshift(phi, 0, 1), 0, 1))
+    check("auto-depth mixed: +T (err=" & $err15a & ")", err15a < 1.0e-20)
+    check("auto-depth mixed: 2*X (err=" & $err15b & ")", err15b < 1.0e-20)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TEST 16: Named stencil — no-arg form (hop)
+    #
+    # Reusable stencil with read/write binding from definition scope.
+    # ─────────────────────────────────────────────────────────────────────
+    print "=== Test 16: Named stencil — no-arg hop() ==="
+
+    var Whop = lattice.newGaugeField()
+
+    stencil hop(lattice):
+      read: U
+      write: Whop
+      accelerator:
+        for n in sites:
+          for mu in 0..<nd:
+            Whop[mu][n] = U[mu][n >> +mu]
+
+    hop(U, Whop)  # first call
+    var maxErr16: cdouble = 0.0
+    for mu in 0.cint..<cint(nd):
+      let refMu = cshift(U[mu], mu, 1)
+      let errMu = norm2(Whop[mu] - refMu)
+      if errMu > maxErr16: maxErr16 = errMu
+    check("named hop() 1st call (maxErr=" & $maxErr16 & ")", maxErr16 < 1.0e-20)
+
+    hop(U, Whop)  # second call — same result, but infrastructure reused
+    var maxErr16b: cdouble = 0.0
+    for mu in 0.cint..<cint(nd):
+      let refMu = cshift(U[mu], mu, 1)
+      let errMu = norm2(Whop[mu] - refMu)
+      if errMu > maxErr16b: maxErr16b = errMu
+    check("named hop() 2nd call (maxErr=" & $maxErr16b & ")", maxErr16b < 1.0e-20)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TEST 17: Named stencil — parameterized call (Dslash-style)
+    #
+    # stencil with fixed: U, read: psi_in, write: psi_out
+    # Called as: myOp(inputField, outputField)
+    # ─────────────────────────────────────────────────────────────────────
+    print "=== Test 17: Named stencil — parameterized myOp(in, out) ==="
+
+    # Simple operation: shift +T on a scalar field, parameterized
+    stencil myShiftT(lattice):
+      read: fin
+      write: fout
+      accelerator:
+        for n in sites:
+          fout[n] = fin[n >> +T]
+
+    var in17 = lattice.newComplexField()
+    var out17 = lattice.newComplexField()
+    rng.random(in17)
+
+    myShiftT(in17, out17)
+    let err17a = norm2(out17 - cshift(in17, 3, 1))
+    check("parameterized myShiftT (1st call, err=" & $err17a & ")", err17a < 1.0e-20)
+
+    # Call again with different input
+    var in17b = lattice.newComplexField()
+    rng.random(in17b)
+    myShiftT(in17b, out17)
+    let err17b = norm2(out17 - cshift(in17b, 3, 1))
+    check("parameterized myShiftT (2nd call, err=" & $err17b & ")", err17b < 1.0e-20)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TEST 18: Named stencil with fixed: fields
+    #
+    # The gauge field U is padded once at definition. Read field changes
+    # each call; fixed field stays the same.
+    # ─────────────────────────────────────────────────────────────────────
+    print "=== Test 18: Named stencil with fixed: U ==="
+
+    # Compute per-component: out[mu] = U[mu] shifted by +mu (a simple test using fixed)
+    stencil fixedGaugeShift(lattice):
+      fixed: U
+      write: Whop
+      accelerator:
+        for n in sites:
+          for mu in 0..<nd:
+            Whop[mu][n] = U[mu][n >> +mu]
+
+    fixedGaugeShift(Whop)
+    var maxErr18: cdouble = 0.0
+    for mu in 0.cint..<cint(nd):
+      let refMu = cshift(U[mu], mu, 1)
+      let errMu = norm2(Whop[mu] - refMu)
+      if errMu > maxErr18: maxErr18 = errMu
+    check("fixed: U named stencil (maxErr=" & $maxErr18 & ")", maxErr18 < 1.0e-20)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TEST 19: Named stencil with fixed: + read: + write: (Dslash pattern)
+    #
+    # fixed: U (gauge, padded once)
+    # read: psi_in (changes each call)
+    # write: psi_out
+    # Kernel: simple forward shift with gauge link: out = U[mu] * in[+mu]
+    # ─────────────────────────────────────────────────────────────────────
+    print "=== Test 19: Dslash-pattern named stencil ==="
+
+    stencil dslashLike(lattice):
+      fixed: U
+      read: sf_in
+      write: sf_out
+      accelerator:
+        for n in sites:
+          for mu in 0..<nd:
+            sf_out[mu][n] = U[mu][n] * sf_in[mu][n >> +mu]
+
+    var dslIn = lattice.newGaugeField()
+    var dslOut = lattice.newGaugeField()
+    for mu in 0.cint..<cint(nd):
+      rng.random(dslIn[mu])
+
+    dslashLike(dslIn, dslOut)
+
+    # Reference: out[mu] = U[mu] * Cshift(dslIn[mu], mu, +1)
+    var maxErr19: cdouble = 0.0
+    for mu in 0.cint..<cint(nd):
+      let ref19 = U[mu] * cshift(dslIn[mu], mu, 1)
+      let errMu = norm2(dslOut[mu] - ref19)
+      if errMu > maxErr19: maxErr19 = errMu
+    check("Dslash-pattern (maxErr=" & $maxErr19 & ")", maxErr19 < 1.0e-20)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TEST 20: Direction generic — single direction [μ: Direction]
+    #
+    # Apply a per-direction forward shift. Call with each constant direction
+    # and verify against Cshift.
+    # ─────────────────────────────────────────────────────────────────────
+    print "=== Test 20: Direction generic — single direction ==="
+
+    rng.random(phi)
+
+    stencil shiftDir[d: Direction](lattice):
+      read: phi
+      write: psi
+      accelerator:
+        for n in sites:
+          psi[n] = phi[n >> +d]
+
+    # Test with constant directions
+    shiftDir(X, phi, psi)
+    let err20x = norm2(psi - cshift(phi, 0, 1))
+    check("dir generic [X] (err=" & $err20x & ")", err20x < 1.0e-20)
+
+    shiftDir(Y, phi, psi)
+    let err20y = norm2(psi - cshift(phi, 1, 1))
+    check("dir generic [Y] (err=" & $err20y & ")", err20y < 1.0e-20)
+
+    shiftDir(Z, phi, psi)
+    let err20z = norm2(psi - cshift(phi, 2, 1))
+    check("dir generic [Z] (err=" & $err20z & ")", err20z < 1.0e-20)
+
+    shiftDir(T, phi, psi)
+    let err20t = norm2(psi - cshift(phi, 3, 1))
+    check("dir generic [T] (err=" & $err20t & ")", err20t < 1.0e-20)
+
+    # Test with runtime loop variable
+    var maxErr20: cdouble = 0.0
+    for mu in 0..<nd:
+      shiftDir(Direction(mu), phi, psi)
+      let errMu = norm2(psi - cshift(phi, cint(mu), 1))
+      if errMu > maxErr20: maxErr20 = errMu
+    check("dir generic loop over μ (maxErr=" & $maxErr20 & ")", maxErr20 < 1.0e-20)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TEST 21: Direction generic — two directions [μ, ν: Direction]
+    #
+    # Diagonal shift: phi[n >> (+mu + +nu)] for different mu,nu combos.
+    # ─────────────────────────────────────────────────────────────────────
+    print "=== Test 21: Direction generic — two directions ==="
+
+    stencil diagShift[mu, nu: Direction](lattice):
+      read: phi
+      write: psi
+      accelerator:
+        for n in sites:
+          psi[n] = phi[n >> (+mu + +nu)]
+
+    # X+Y
+    diagShift(X, Y, phi, psi)
+    let err21xy = norm2(psi - cshift(cshift(phi, 0, 1), 1, 1))
+    check("dir generic [X,Y] diagonal (err=" & $err21xy & ")", err21xy < 1.0e-20)
+
+    # Z+T
+    diagShift(Z, T, phi, psi)
+    let err21zt = norm2(psi - cshift(cshift(phi, 2, 1), 3, 1))
+    check("dir generic [Z,T] diagonal (err=" & $err21zt & ")", err21zt < 1.0e-20)
+
+    # Loop over all planes
+    var maxErr21: cdouble = 0.0
+    for mu in 0..<nd:
+      for nu in 0..<nd:
+        if mu != nu:
+          diagShift(Direction(mu), Direction(nu), phi, psi)
+          let ref21 = cshift(cshift(phi, cint(mu), 1), cint(nu), 1)
+          let errMuNu = norm2(psi - ref21)
+          if errMuNu > maxErr21: maxErr21 = errMuNu
+    check("dir generic all planes (maxErr=" & $maxErr21 & ")", maxErr21 < 1.0e-20)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TEST 22: Direction generic with fixed: gauge field (plaquette-like)
+    #
+    # For each (mu, nu) plane, compute U[mu][n] * U[nu][n >> +mu]
+    # This tests the combination of direction generics + fixed fields +
+    # chained gauge bracket access with direction-generic shifts.
+    # ─────────────────────────────────────────────────────────────────────
+    print "=== Test 22: Direction generic plaquette-like ==="
+
+    var Pout = lattice.newGaugeField()
+
+    # Use unit gauge for predictable results: set each component to identity
+    for mu0 in 0.cint..<cint(nd):
+      setToOne(U[mu0])
+
+    stencil plaqLike[mu, nu: Direction](lattice):
+      fixed: U
+      write: Pout
+      accelerator:
+        for n in sites:
+          # Just test the shifted gauge read: Pout[mu] = U[nu] shifted by +mu
+          Pout[mu][n] = U[nu][n >> +mu]
+
+    # Test X, Y plane
+    plaqLike(X, Y, Pout)
+    # U[Y][n >> +X] should equal Cshift(U[Y], X, +1)
+    let err22 = norm2(Pout[0] - cshift(U[1], 0, 1))
+    check("dir generic plaquette-like [X,Y] (err=" & $err22 & ")", err22 < 1.0e-20)
+
+    # Restore random gauge
+    for mu in 0.cint..<cint(nd):
+      rng.random(U[mu])
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TEST 23: Direction generic — backward shift
+    #
+    # Single direction generic with -d (negative direction shift)
+    # ─────────────────────────────────────────────────────────────────────
+    print "=== Test 23: Direction generic — backward shift ==="
+
+    rng.random(phi)
+
+    stencil bwdShift[d: Direction](lattice):
+      read: phi
+      write: psi
+      accelerator:
+        for n in sites:
+          psi[n] = phi[n >> -d]
+
+    var maxErr23: cdouble = 0.0
+    for mu in 0..<nd:
+      bwdShift(Direction(mu), phi, psi)
+      let errMu = norm2(psi - cshift(phi, cint(mu), -1))
+      if errMu > maxErr23: maxErr23 = errMu
+    check("dir generic backward -d (maxErr=" & $maxErr23 & ")", maxErr23 < 1.0e-20)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TEST 24: Direction generic — scaled shift 2*d
+    # ─────────────────────────────────────────────────────────────────────
+    print "=== Test 24: Direction generic — scaled shift 2*d ==="
+
+    stencil dblShift[d: Direction](lattice, depth = 2):
+      read: phi
+      write: psi
+      accelerator:
+        for n in sites:
+          psi[n] = phi[n >> 2*d]
+
+    var maxErr24: cdouble = 0.0
+    for mu in 0..<nd:
+      dblShift(Direction(mu), phi, psi)
+      let ref24 = cshift(cshift(phi, cint(mu), 1), cint(mu), 1)
+      let errMu = norm2(psi - ref24)
+      if errMu > maxErr24: maxErr24 = errMu
+    check("dir generic 2*d (maxErr=" & $maxErr24 & ")", maxErr24 < 1.0e-20)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TEST 25: Named stencil with auto-depth
+    #
+    # Verify that named stencils also infer depth correctly.
+    # ─────────────────────────────────────────────────────────────────────
+    print "=== Test 25: Named stencil with auto-depth ==="
+
+    stencil autoDepthShift(lattice):
+      read: phi
+      write: psi
+      accelerator:
+        for n in sites:
+          psi[n] = phi[n >> 2*T]
+
+    autoDepthShift(phi, psi)
+    let err25 = norm2(psi - cshift(cshift(phi, 3, 1), 3, 1))
+    check("named auto-depth 2*T (err=" & $err25 & ")", err25 < 1.0e-20)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TEST 26: Direction generic with auto-depth — 2*d
+    # ─────────────────────────────────────────────────────────────────────
+    print "=== Test 26: Direction generic with auto-depth — 2*d ==="
+
+    stencil dblShiftAuto[d: Direction](lattice):
+      read: phi
+      write: psi
+      accelerator:
+        for n in sites:
+          psi[n] = phi[n >> 2*d]
+
+    var maxErr26: cdouble = 0.0
+    for mu in 0..<nd:
+      dblShiftAuto(Direction(mu), phi, psi)
+      let ref26 = cshift(cshift(phi, cint(mu), 1), cint(mu), 1)
+      let errMu = norm2(psi - ref26)
+      if errMu > maxErr26: maxErr26 = errMu
+    check("dir generic auto-depth 2*d (maxErr=" & $maxErr26 & ")", maxErr26 < 1.0e-20)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Summary
+    # ─────────────────────────────────────────────────────────────────────
+    print ""
+    print "═══════════════════════════════════════════════════════════"
+    print " Results:", numPassed, "passed,", numFailed, "failed"
+    print "═══════════════════════════════════════════════════════════"
