@@ -61,6 +61,54 @@ def which(name: str) -> str | None:
     return shutil.which(name)
 
 
+# ── Terminal title + stage progress ─────────────────────────────────
+
+def _set_terminal_title(title: str) -> None:
+    """Set the terminal window/tab title via an OSC escape sequence."""
+    # Works in xterm, iTerm2, GNOME Terminal, Windows Terminal, etc.
+    sys.stdout.write(f"\033]0;{title}\007")
+    sys.stdout.flush()
+
+
+class StageTracker:
+    """Track and display build progress like Spack does.
+
+    Usage::
+
+        stages = StageTracker([
+            ("compiler", "Resolving compiler"),
+            ("gmp",      "Installing GMP"),
+            ...
+        ])
+        stages.begin("compiler")
+        # … do work …
+        stages.begin("gmp")
+        # … etc …
+        stages.finish()
+    """
+
+    def __init__(self, steps: list[tuple[str, str]]) -> None:
+        # steps: [(key, human-readable label), …]
+        self._steps = steps
+        self._total = len(steps)
+        self._index: dict[str, int] = {key: i for i, (key, _) in enumerate(steps)}
+
+    def begin(self, key: str) -> None:
+        """Mark stage *key* as active."""
+        idx = self._index[key]
+        num = idx + 1
+        label = self._steps[idx][1]
+        banner = f"[{num}/{self._total}] {label}"
+        _set_terminal_title(f"Grim bootstrap {banner}")
+        print(f"\n\033[1;36m==>\033[0m \033[1m{banner}\033[0m")
+
+    def finish(self) -> None:
+        """Mark the entire process as complete."""
+        _set_terminal_title("Grim bootstrap — done")
+        print(f"\n\033[1;32m==>\033[0m \033[1mBootstrap complete "
+              f"[{self._total}/{self._total}]\033[0m")
+
+
 def download(url: str, dest: Path) -> None:
     """Download a URL to dest, verifying we didn't get an HTML error page."""
     run(["curl", "-fL", "-o", str(dest), url])
@@ -79,12 +127,297 @@ def download(url: str, dest: Path) -> None:
 NJOBS = str(multiprocessing.cpu_count())
 
 # ──────────────────────────────────────────────────────────────────────
+# Spack helpers  (always uses a private, local clone — never the user's)
+# ──────────────────────────────────────────────────────────────────────
+
+def _local_spack_bin(deps_prefix: Path) -> Path:
+    """Return the path to the local Spack binary under *deps_prefix*."""
+    return deps_prefix / "src" / "spack" / "bin" / "spack"
+
+
+def ensure_spack(deps_prefix: Path) -> None:
+    """Clone a private Spack into ``deps_prefix/src/spack`` if not already present.
+
+    We never use a system or user Spack installation — every Spack
+    command executed by this script goes through the local clone so
+    the build is fully self-contained and reproducible.
+    """
+    spack_bin = _local_spack_bin(deps_prefix)
+    if spack_bin.exists():
+        print(f"Local Spack already present at {spack_bin}")
+        return
+
+    print("\nInstalling a local Spack clone …")
+    ensure_dir(deps_prefix / "src")
+    run(
+        "git clone --depth=1 https://github.com/spack/spack.git",
+        cwd=deps_prefix / "src",
+    )
+    if not spack_bin.exists():
+        raise RuntimeError(
+            f"Spack clone succeeded but {spack_bin} does not exist."
+        )
+    print(f"Local Spack installed: {spack_bin}")
+
+
+def _spack_cmd(deps_prefix: Path) -> list[str]:
+    """Return the base command list for invoking the local Spack."""
+    return [str(_local_spack_bin(deps_prefix))]
+
+
+def spack_install(spec: str, deps_prefix: Path, *, jobs: str = NJOBS) -> Path:
+    """Install a Spack spec using the local Spack and return its prefix."""
+    cmd = _spack_cmd(deps_prefix) + ["install", f"-j{jobs}", spec]
+    print(f"\n>>> {' '.join(cmd)}")
+    subprocess.check_call(cmd, env=os.environ)
+    return spack_prefix(spec, deps_prefix)
+
+
+def spack_prefix(spec: str, deps_prefix: Path) -> Path:
+    """Return the install prefix of an already-installed Spack spec."""
+    cmd = _spack_cmd(deps_prefix) + ["location", "-i", spec]
+    out = subprocess.check_output(cmd, env=os.environ, text=True).strip()
+    return Path(out)
+
+
+def spack_link_into(spec: str, deps_prefix: Path, *, jobs: str = NJOBS) -> Path:
+    """Install *spec* with the local Spack and symlink artifacts into *deps_prefix*.
+
+    This keeps a single unified prefix for Grid's configure step while
+    letting Spack manage the actual build.
+
+    Libraries from both ``lib/`` and ``lib64/`` in the Spack prefix are
+    symlinked into ``deps_prefix/lib/`` so that Grid's ``--with-*=PREFIX``
+    flags (which always look in ``PREFIX/lib/``) work correctly.
+    """
+    pfx = spack_install(spec, deps_prefix, jobs=jobs)
+
+    # Map Spack sub-directories to their destination under deps_prefix.
+    # Crucially, lib64/ is merged into lib/ so Grid can find everything.
+    DIR_MAP: dict[str, str] = {
+        "lib":     "lib",
+        "lib64":   "lib",       # ← redirect into lib/
+        "include": "include",
+        "bin":     "bin",
+        "share":   "share",
+    }
+
+    for src_sub, dst_sub in DIR_MAP.items():
+        src_dir = pfx / src_sub
+        if not src_dir.exists():
+            continue
+        dst_dir = ensure_dir(deps_prefix / dst_sub)
+        for item in src_dir.iterdir():
+            dst = dst_dir / item.name
+            if dst.exists() or dst.is_symlink():
+                dst.unlink()
+            dst.symlink_to(item)
+    return pfx
+
+
+# Mapping from our internal library names to Spack spec strings.
+SPACK_SPECS: dict[str, str] = {
+    "gmp":        "gmp",
+    "mpfr":       "mpfr",
+    "fftw":       "fftw ~mpi precision=float,double",
+    "openssl":    "openssl",
+    "hdf5":       "hdf5 +cxx ~mpi",
+    "lime":       "c-lime",
+    "libunwind":  "libunwind",
+}
+
+
+def build_or_spack(
+    lib_name: str,
+    build_fn,
+    build_args: tuple,
+    deps_prefix: Path,
+    *,
+    use_spack: bool = False,
+    jobs: str = NJOBS,
+) -> None:
+    """Try *build_fn*; on failure (or if *use_spack*) fall back to Spack."""
+    spec = SPACK_SPECS.get(lib_name, lib_name)
+
+    if use_spack:
+        print(f"\n--use-spack: installing {lib_name} via Spack ({spec})")
+        spack_link_into(spec, deps_prefix, jobs=jobs)
+        return
+
+    try:
+        build_fn(*build_args)
+    except (subprocess.CalledProcessError, RuntimeError) as exc:
+        print(f"\n{'!'*60}")
+        print(f"WARNING: source build of {lib_name} failed: {exc}")
+        print(f"Falling back to Spack ({spec}) …")
+        print(f"{'!'*60}")
+        ensure_spack(deps_prefix)
+        spack_link_into(spec, deps_prefix, jobs=jobs)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Compiler resolution  (default: LLVM/Clang)
+# ──────────────────────────────────────────────────────────────────────
+
+LLVM_VERSION = "18.1.8"
+
+
+def _find_system_compiler() -> tuple[str, str]:
+    """Return the best available system C/C++ compiler as (cc, cxx)."""
+    if which("gcc") and which("g++"):
+        return "gcc", "g++"
+    if which("cc") and which("c++"):
+        # 'cc' is almost always gcc on Linux
+        return "gcc", "g++"
+    return "gcc", "g++"  # hopeful default
+
+
+def _install_prebuilt_llvm(deps_prefix: Path) -> Path:
+    """Download a prebuilt LLVM/Clang release.  Returns the prefix containing bin/clang."""
+    import platform
+    machine = platform.machine().lower()
+    if machine in ("x86_64", "amd64"):
+        arch = "X64"
+    elif machine in ("aarch64", "arm64"):
+        arch = "ARM64"
+    else:
+        raise RuntimeError(f"No prebuilt LLVM binary available for {machine}")
+
+    version = LLVM_VERSION
+    src = ensure_dir(deps_prefix / "src" / "llvm")
+
+    # Already extracted from a previous run?
+    for d in src.iterdir():
+        if d.is_dir() and (d / "bin" / "clang").exists():
+            return d
+
+    tarball_name = f"LLVM-{version}-Linux-{arch}.tar.xz"
+    url = (f"https://github.com/llvm/llvm-project/releases/"
+           f"download/llvmorg-{version}/{tarball_name}")
+    tarball = src / tarball_name
+
+    if not tarball.exists():
+        download(url, tarball)
+    run(f"tar xf {tarball_name}", cwd=src)
+
+    # Scan for the extracted directory (name may vary across releases)
+    for d in src.iterdir():
+        if d.is_dir() and (d / "bin" / "clang").exists():
+            return d
+
+    raise RuntimeError(
+        "Extracted LLVM tarball but could not find bin/clang in any subdirectory."
+    )
+
+
+def _prepend_to_path(bindir: Path) -> None:
+    """Prepend *bindir* to PATH for this process and all children."""
+    os.environ["PATH"] = str(bindir) + os.pathsep + os.environ.get("PATH", "")
+
+
+def _set_compiler_env(
+    cc: str, cxx: str, deps_prefix: Path, *, extra_path: str | None = None,
+) -> None:
+    """Persist CC/CXX in ``os.environ`` and write ``deps/compiler.env``
+    so that Grim's ``configure`` can pick up the same compiler."""
+    os.environ["CC"] = cc
+    os.environ["CXX"] = cxx
+
+    env_file = deps_prefix / "compiler.env"
+    with open(env_file, "w") as f:
+        f.write("# Auto-generated by bootstrap \u2014 do not edit\n")
+        if extra_path:
+            f.write(f'export PATH="{extra_path}:${{PATH}}"\n')
+        f.write(f'export CC="{cc}"\n')
+        f.write(f'export CXX="{cxx}"\n')
+    print(f"Wrote {env_file}")
+
+
+def ensure_compiler(
+    deps_prefix: Path, *, no_llvm: bool = False, jobs: str = NJOBS,
+) -> tuple[str, str]:
+    """Resolve C/C++ compilers.  Returns ``(cc, cxx)``.
+
+    Fallback chain (unless *no_llvm*):
+
+    1. User\u2019s ``clang`` / ``clang++`` already on ``PATH``
+    2. Download a prebuilt LLVM release into ``deps/src/llvm/``
+    3. Install LLVM via the local Spack clone
+    4. System default compilers (``gcc`` / ``g++``)
+    """
+    if no_llvm:
+        cc, cxx = _find_system_compiler()
+        print(f"--no-llvm: using system compilers: {cc} / {cxx}")
+        _set_compiler_env(cc, cxx, deps_prefix)
+        return cc, cxx
+
+    # 1. User\u2019s clang on PATH
+    if which("clang") and which("clang++"):
+        print(f"Found clang on PATH: {which('clang')}")
+        _set_compiler_env("clang", "clang++", deps_prefix)
+        return "clang", "clang++"
+
+    # 2. Prebuilt LLVM download
+    try:
+        print("\nclang not found on PATH \u2014 trying prebuilt LLVM download \u2026")
+        llvm_prefix = _install_prebuilt_llvm(deps_prefix)
+        _prepend_to_path(llvm_prefix / "bin")
+        print(f"Prebuilt LLVM ready: {llvm_prefix}")
+        _set_compiler_env(
+            "clang", "clang++", deps_prefix,
+            extra_path=str(llvm_prefix / "bin"),
+        )
+        return "clang", "clang++"
+    except (subprocess.CalledProcessError, RuntimeError, OSError) as exc:
+        print(f"Prebuilt LLVM install failed: {exc}")
+
+    # 3. Spack
+    try:
+        print("\nTrying to install LLVM via Spack \u2026")
+        ensure_spack(deps_prefix)
+        llvm_prefix = spack_install("llvm", deps_prefix, jobs=jobs)
+        if (llvm_prefix / "bin" / "clang").exists():
+            _prepend_to_path(llvm_prefix / "bin")
+            print(f"Spack LLVM ready: {llvm_prefix}")
+            _set_compiler_env(
+                "clang", "clang++", deps_prefix,
+                extra_path=str(llvm_prefix / "bin"),
+            )
+            return "clang", "clang++"
+    except (subprocess.CalledProcessError, RuntimeError) as exc:
+        print(f"Spack LLVM install failed: {exc}")
+
+    # 4. Fallback to system defaults
+    cc, cxx = _find_system_compiler()
+    print(f"\n{'!'*60}")
+    print(f"WARNING: Could not install LLVM/Clang.")
+    print(f"Falling back to system compilers: {cc} / {cxx}")
+    print(f"{'!'*60}")
+    _set_compiler_env(cc, cxx, deps_prefix)
+    return cc, cxx
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Dependency builders
 # ──────────────────────────────────────────────────────────────────────
 
+def _lib_installed(prefix: Path, libname: str) -> bool:
+    """Return True if *libname* (e.g. ``libgmp``) exists under *prefix*.
+
+    Checks for static (``.a``) and shared (``.so``) libraries in both
+    ``lib/`` and ``lib64/`` so that source-built *and* Spack-installed
+    libraries are detected equally.
+    """
+    for libdir in ("lib", "lib64"):
+        for ext in (".a", ".so"):
+            if (prefix / libdir / f"{libname}{ext}").exists():
+                return True
+    return False
+
+
 def build_gmp(prefix: Path, jobs: str) -> None:
     src = ensure_dir(prefix / "src" / "gmp")
-    if (prefix / "lib" / "libgmp.a").exists() or (prefix / "lib" / "libgmp.so").exists():
+    if _lib_installed(prefix, "libgmp"):
         print("GMP already installed, skipping.")
         return
     tarball = "gmp-6.3.0.tar.xz"
@@ -100,7 +433,7 @@ def build_gmp(prefix: Path, jobs: str) -> None:
 
 def build_mpfr(prefix: Path, gmp_prefix: Path, jobs: str) -> None:
     src = ensure_dir(prefix / "src" / "mpfr")
-    if (prefix / "lib" / "libmpfr.a").exists() or (prefix / "lib" / "libmpfr.so").exists():
+    if _lib_installed(prefix, "libmpfr"):
         print("MPFR already installed, skipping.")
         return
     tarball = "mpfr-4.2.1.tar.xz"
@@ -116,7 +449,7 @@ def build_mpfr(prefix: Path, gmp_prefix: Path, jobs: str) -> None:
 
 def build_fftw(prefix: Path, jobs: str) -> None:
     src = ensure_dir(prefix / "src" / "fftw")
-    if (prefix / "lib" / "libfftw3.a").exists() or (prefix / "lib" / "libfftw3.so").exists():
+    if _lib_installed(prefix, "libfftw3"):
         print("FFTW already installed, skipping.")
         return
     tarball = "fftw-3.3.10.tar.gz"
@@ -138,7 +471,7 @@ def build_fftw(prefix: Path, jobs: str) -> None:
 
 def build_openssl(prefix: Path, jobs: str) -> None:
     src = ensure_dir(prefix / "src" / "openssl")
-    if (prefix / "lib" / "libssl.a").exists() or (prefix / "lib" / "libssl.so").exists():
+    if _lib_installed(prefix, "libssl"):
         print("OpenSSL already installed, skipping.")
         return
     tarball = "openssl-3.2.1.tar.gz"
@@ -154,7 +487,7 @@ def build_openssl(prefix: Path, jobs: str) -> None:
 
 def build_hdf5(prefix: Path, jobs: str) -> None:
     src = ensure_dir(prefix / "src" / "hdf5")
-    if (prefix / "lib" / "libhdf5.a").exists() or (prefix / "lib" / "libhdf5.so").exists():
+    if _lib_installed(prefix, "libhdf5"):
         print("HDF5 already installed, skipping.")
         return
     tag = "hdf5_1.14.6"
@@ -171,7 +504,7 @@ def build_hdf5(prefix: Path, jobs: str) -> None:
 
 def build_lime(prefix: Path, jobs: str) -> None:
     src = ensure_dir(prefix / "src" / "lime")
-    if (prefix / "lib" / "liblime.a").exists() or (prefix / "lib" / "liblime.so").exists():
+    if _lib_installed(prefix, "liblime"):
         print("LIME (c-lime) already installed, skipping.")
         return
     clone_dir = src / "c-lime"
@@ -185,7 +518,7 @@ def build_lime(prefix: Path, jobs: str) -> None:
 
 def build_libunwind(prefix: Path, jobs: str) -> None:
     src = ensure_dir(prefix / "src" / "libunwind")
-    if (prefix / "lib" / "libunwind.a").exists() or (prefix / "lib" / "libunwind.so").exists():
+    if _lib_installed(prefix, "libunwind"):
         print("libunwind already installed, skipping.")
         return
     tarball = "libunwind-1.8.1.tar.gz"
@@ -352,15 +685,15 @@ def build_grid(args: argparse.Namespace, deps_prefix: Path) -> None:
     configure_cmd.append(f"--with-gmp={deps_prefix}")
     configure_cmd.append(f"--with-mpfr={deps_prefix}")
 
-    if args.with_fftw or (deps_prefix / "lib" / "libfftw3.a").exists():
+    if args.with_fftw or _lib_installed(deps_prefix, "libfftw3"):
         configure_cmd.append(f"--with-fftw={args.with_fftw or deps_prefix}")
-    if args.with_hdf5 or (deps_prefix / "lib" / "libhdf5.a").exists():
+    if args.with_hdf5 or _lib_installed(deps_prefix, "libhdf5"):
         configure_cmd.append(f"--with-hdf5={args.with_hdf5 or deps_prefix}")
-    if args.with_lime or (deps_prefix / "lib" / "liblime.a").exists():
+    if args.with_lime or _lib_installed(deps_prefix, "liblime"):
         configure_cmd.append(f"--with-lime={args.with_lime or deps_prefix}")
-    if args.with_openssl or (deps_prefix / "lib" / "libssl.a").exists():
+    if args.with_openssl or _lib_installed(deps_prefix, "libssl"):
         configure_cmd.append(f"--with-openssl={args.with_openssl or deps_prefix}")
-    if args.with_unwind or (deps_prefix / "lib" / "libunwind.a").exists():
+    if args.with_unwind or _lib_installed(deps_prefix, "libunwind"):
         configure_cmd.append(f"--with-unwind={args.with_unwind or deps_prefix}")
 
     # ── LAPACK / MKL / IPP ──────────────────────────────────────────
@@ -447,6 +780,12 @@ examples:
   # Skip dependencies (already installed system-wide)
   python3 bootstrap.py --skip-deps --with-gmp /usr --with-mpfr /usr
 
+  # Install all dependencies via Spack instead of building from source
+  python3 bootstrap.py --use-spack
+
+  # Use the system default compiler (GCC) instead of LLVM/Clang
+  python3 bootstrap.py --no-llvm
+
   # Pass extra flags directly to Grid's configure
   python3 bootstrap.py --extra-configure-flags="--disable-fermion-reps --enable-Nc=4"
 """,
@@ -456,6 +795,13 @@ examples:
     dep = p.add_argument_group("dependency control")
     dep.add_argument("--skip-deps", action="store_true",
                      help="Do not build any dependencies; assume they are installed elsewhere.")
+    dep.add_argument("--use-spack", action="store_true",
+                     help="Install all dependencies via Spack instead of building from source. "
+                          "Requires `spack` on PATH. Without this flag, Spack is only used "
+                          "as a fallback when a source build fails.")
+    dep.add_argument("--no-llvm", action="store_true",
+                     help="Do not attempt to install or use LLVM/Clang; use the default "
+                          "system compiler (typically GCC) instead.")
     dep.add_argument("--skip-nim", action="store_true",
                      help="Skip installing Nim (use system nim instead)")
     dep.add_argument("--skip-gmp", action="store_true", help="Skip building GMP")
@@ -630,62 +976,127 @@ examples:
 # Main
 # ──────────────────────────────────────────────────────────────────────
 
+def _build_stage_list(args: argparse.Namespace) -> list[tuple[str, str]]:
+    """Return the ordered list of ``(key, label)`` stages for this run."""
+    stages: list[tuple[str, str]] = []
+
+    stages.append(("compiler", "Resolving compiler"))
+
+    if not args.skip_deps:
+        # Each dependency that will actually be processed gets a stage.
+        if not args.skip_gmp and not args.with_gmp:
+            stages.append(("gmp", "Installing GMP"))
+        if not args.skip_mpfr and not args.with_mpfr:
+            stages.append(("mpfr", "Installing MPFR"))
+        if not args.skip_fftw and not args.with_fftw:
+            stages.append(("fftw", "Installing FFTW"))
+        if not args.skip_openssl and not args.with_openssl:
+            stages.append(("openssl", "Installing OpenSSL"))
+        if not args.skip_hdf5 and not args.with_hdf5:
+            stages.append(("hdf5", "Installing HDF5"))
+        if not args.skip_lime and not args.with_lime:
+            stages.append(("lime", "Installing c-lime"))
+        if not args.skip_libunwind and not args.with_unwind:
+            stages.append(("libunwind", "Installing libunwind"))
+
+    if not args.skip_nim:
+        stages.append(("nim", "Installing Nim"))
+
+    stages.append(("grid", "Building Grid"))
+    return stages
+
+
 def main() -> None:
     args = parse_args()
     root = Path.cwd()
     deps_prefix = root / "deps"
     ensure_dir(deps_prefix)
 
+    stages = StageTracker(_build_stage_list(args))
+
+    # ── Resolve compiler ───────────────────────────────────────────
+    stages.begin("compiler")
+    cc, cxx = ensure_compiler(
+        deps_prefix, no_llvm=args.no_llvm, jobs=args.jobs,
+    )
+    print(f"Using CC={cc}  CXX={cxx}")
+
     # ── Build dependencies ──────────────────────────────────────────
     if not args.skip_deps:
-        print("\n" + "=" * 60)
-        print("Building dependencies")
-        print("=" * 60)
+        use_spack = args.use_spack
+        if use_spack:
+            ensure_spack(deps_prefix)
 
         # GMP  (required)
         if not args.skip_gmp and not args.with_gmp:
-            build_gmp(deps_prefix, args.jobs)
+            stages.begin("gmp")
+            build_or_spack(
+                "gmp", build_gmp, (deps_prefix, args.jobs),
+                deps_prefix, use_spack=use_spack, jobs=args.jobs,
+            )
 
         # MPFR (required)
         if not args.skip_mpfr and not args.with_mpfr:
+            stages.begin("mpfr")
             gmp_pfx = Path(args.with_gmp) if args.with_gmp else deps_prefix
-            build_mpfr(deps_prefix, gmp_pfx, args.jobs)
+            build_or_spack(
+                "mpfr", build_mpfr, (deps_prefix, gmp_pfx, args.jobs),
+                deps_prefix, use_spack=use_spack, jobs=args.jobs,
+            )
 
         # FFTW (optional but recommended)
         if not args.skip_fftw and not args.with_fftw:
-            build_fftw(deps_prefix, args.jobs)
+            stages.begin("fftw")
+            build_or_spack(
+                "fftw", build_fftw, (deps_prefix, args.jobs),
+                deps_prefix, use_spack=use_spack, jobs=args.jobs,
+            )
 
         # OpenSSL (required by Grid for SHA256)
         if not args.skip_openssl and not args.with_openssl:
-            build_openssl(deps_prefix, args.jobs)
+            stages.begin("openssl")
+            build_or_spack(
+                "openssl", build_openssl, (deps_prefix, args.jobs),
+                deps_prefix, use_spack=use_spack, jobs=args.jobs,
+            )
 
         # HDF5 (optional)
         if not args.skip_hdf5 and not args.with_hdf5:
-            build_hdf5(deps_prefix, args.jobs)
+            stages.begin("hdf5")
+            build_or_spack(
+                "hdf5", build_hdf5, (deps_prefix, args.jobs),
+                deps_prefix, use_spack=use_spack, jobs=args.jobs,
+            )
 
         # LIME / c-lime (optional, for ILDG/SciDAC file format)
         if not args.skip_lime and not args.with_lime:
-            build_lime(deps_prefix, args.jobs)
+            stages.begin("lime")
+            build_or_spack(
+                "lime", build_lime, (deps_prefix, args.jobs),
+                deps_prefix, use_spack=use_spack, jobs=args.jobs,
+            )
 
         # libunwind (optional, for backtraces)
         if not args.skip_libunwind and not args.with_unwind:
-            build_libunwind(deps_prefix, args.jobs)
+            stages.begin("libunwind")
+            build_or_spack(
+                "libunwind", build_libunwind, (deps_prefix, args.jobs),
+                deps_prefix, use_spack=use_spack, jobs=args.jobs,
+            )
     else:
         print("--skip-deps: skipping all dependency builds")
 
     # ── Install Nim ─────────────────────────────────────────────────
     grid_install = root / "grid-install"
     if not args.skip_nim:
-        print("\n" + "=" * 60)
-        print("Installing Nim")
-        print("=" * 60)
+        stages.begin("nim")
         build_nim(grid_install, deps_prefix)
 
     # ── Build Grid ──────────────────────────────────────────────────
-    print("\n" + "=" * 60)
-    print("Building Grid")
-    print("=" * 60)
+    stages.begin("grid")
     build_grid(args, deps_prefix)
+
+    stages.finish()
 
 
 if __name__ == "__main__":

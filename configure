@@ -18,7 +18,7 @@
 #                         (default: ./local/grid-install)
 #   --nim=PATH           Path to nim compiler
 #                         (default: <grid-prefix>/bin/nim)
-#   --cc=COMPILER        C++ compiler override (default: gcc)
+#   --cc=COMPILER        C++ compiler override (default: clang, falls back to gcc)
 #   --jobs=N             Default parallel build jobs (default: nproc)
 # ==========================================================================
 
@@ -33,7 +33,7 @@ SRC_DIR="${SCRIPT_DIR}/src"
 # bootstrap.py installs Grid into <cwd>/grid-install when run from local/
 GRID_PREFIX="${SCRIPT_DIR}/local/grid-install"
 NIM=""
-CC="gcc"
+CC=""
 JOBS=$(nproc 2>/dev/null || echo 4)
 
 # ── Parse arguments ──────────────────────────────────────────────────────
@@ -54,6 +54,29 @@ for arg in "$@"; do
             ;;
     esac
 done
+
+# ── Resolve compiler ─────────────────────────────────────────────────────
+# bootstrap writes deps/compiler.env with the resolved CC/CXX and any
+# PATH additions (e.g. for a locally-installed LLVM).
+_CC_FROM_ARG="$CC"  # preserve any explicit --cc argument
+_COMPILER_ENV="${SCRIPT_DIR}/local/deps/compiler.env"
+if [ -f "$_COMPILER_ENV" ]; then
+    echo "-- Sourcing compiler config: $_COMPILER_ENV"
+    . "$_COMPILER_ENV"
+fi
+# --cc= argument takes precedence over compiler.env
+[ -n "$_CC_FROM_ARG" ] && CC="$_CC_FROM_ARG"
+
+# Auto-detect if still unset, preferring clang
+if [ -z "$CC" ]; then
+    for _try_cc in clang gcc cc; do
+        if command -v "$_try_cc" >/dev/null 2>&1; then
+            CC="$_try_cc"
+            break
+        fi
+    done
+    : "${CC:=gcc}"  # ultimate fallback
+fi
 
 # ── Find Nim ──────────────────────────────────────────────────────────────
 # bootstrap installs Nim into the same prefix as Grid
@@ -87,15 +110,28 @@ echo "   cxxflags: $GRID_CXXFLAGS"
 echo "   ldflags:  $GRID_LDFLAGS"
 echo "   libs:     $GRID_LIBS"
 
-# ── Find C++ compiler ───────────────────────────────────────────────────
+# ── Find C++ compiler & derive Nim compiler name ────────────────────────
+# Nim's --cc: flag expects a compiler *family* (gcc, clang, …), not a path.
+case "$CC" in
+    *clang*) NIM_CC="clang" ;;
+    *)       NIM_CC="gcc" ;;
+esac
+
 CXX_PATH=$(command -v "$CC" 2>/dev/null || true)
 if [ -z "$CXX_PATH" ]; then
-    for try_cc in g++ clang++ c++; do
+    for try_cc in clang gcc g++ c++; do
         CXX_PATH=$(command -v "$try_cc" 2>/dev/null || true)
-        if [ -n "$CXX_PATH" ]; then CC="$try_cc"; break; fi
+        if [ -n "$CXX_PATH" ]; then
+            CC="$try_cc"
+            case "$CC" in
+                *clang*) NIM_CC="clang" ;;
+                *)       NIM_CC="gcc" ;;
+            esac
+            break
+        fi
     done
 fi
-echo "-- C++:  $CC${CXX_PATH:+ ($CXX_PATH)}"
+echo "-- C++:  $CC${CXX_PATH:+ ($CXX_PATH)} (Nim --cc:$NIM_CC)"
 
 # ── Create directories ──────────────────────────────────────────────────
 mkdir -p "${CWD}/build" "${CWD}/bin" "${CWD}/cache"
@@ -149,7 +185,7 @@ const cwd      = getCurrentDir()
 const nimCache = cwd / "cache"
 const srcDir   = cwd / "src"
 const nim      = "${NIM}"
-const compiler = "${CC}"
+const compiler = "${NIM_CC}"
 const gridCfg  = "${GRID_CONFIG}"
 
 # Grid flags — everything (MPI, OpenMP, SIMD, accelerator) is in here
