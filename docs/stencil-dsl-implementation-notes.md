@@ -50,10 +50,18 @@ The macro expands this into:
 1. Create a `PaddedCell(grid, depth)` → padded grid with halo regions
 2. `Exchange(field)` each read/fixed field → pad + MPI halo exchange
 3. Build a `GeneralLocalStencil(paddedGrid, shifts)` → offset/permute table
+   - **Always includes a zero-displacement entry** for unshifted read access
 4. Create views (`AcceleratorRead/Write`) for all fields
 5. Rewrite `phi[n >> +T]` → `coalescedReadGeneralPermute(phi_view[se.offset], se.permute, nd)`
-6. Rewrite `psi[n] = val` → `coalescedWrite(psi_view[n], val)`
-7. `Extract(paddedField)` each write field → copy interior back
+6. Rewrite `phi[n]` (unshifted read) → `coalescedReadGeneralPermute(phi_view[se.offset], se.permute, nd)` using zero-displacement stencil entry
+7. Rewrite `psi[n] = val` → `coalescedWrite(psi_view[n], val)` (write fields unchanged)
+8. `Extract(paddedField)` each write field → copy interior back
+
+> **Key invariant**: Every read from a read/fixed field — whether shifted
+> or unshifted — goes through `coalescedReadGeneralPermute` via the stencil.
+> This is required because PaddedCell may set permute bits even for zero
+> displacement on single-processor dimensions. Only write field accesses
+> use direct view indexing.
 
 Three macro forms:
 - **Anonymous 3-arg**: `stencil(grid, depth = N): body` — explicit depth
@@ -312,6 +320,37 @@ of skSingleVar:
 
 For `skMultiVar` with vars `[mu, nu]`, we generate `4^2 = 16` entries.
 
+### Zero-displacement entry for unshifted reads
+
+After collecting all explicit `>>` shift expressions, the shift collector
+**always** appends a zero-displacement entry to the shift list:
+
+```nim
+const zeroShiftKey* = "__zero_disp__"
+
+proc addZeroDisplacement(shiftMap: var Table[string, ShiftEntry];
+                         shiftList: var seq[NimNode]) =
+  ## Ensures a zero-displacement stencil entry exists for unshifted read access.
+  ## Even phi[n] (no shift) must go through coalescedReadGeneralPermute
+  ## because PaddedCell may set permute bits for zero displacement on
+  ## single-processor dimensions.
+  if zeroShiftKey notin shiftMap:
+    let idx = shiftList.len
+    shiftList.add(quote do: newSeq[int](nd))   # @[0, 0, 0, 0]
+    shiftMap[zeroShiftKey] = ShiftEntry(
+      kind: skConstant, baseIndex: idx, varNames: @[])
+```
+
+This is called in both `stencilAnonymousImpl` and the named stencil path,
+immediately after the `collectShifts` loop. Because a zero-displacement
+entry always exists, `hasShifts` is effectively always `true` — the
+GeneralLocalStencil and its view are always created.
+
+The zero-displacement entry evaluates to `newSeq[int](nd)` at runtime,
+which produces `@[0, 0, 0, 0]` — a displacement that stays at the same
+site. The stencil's `GetEntry` still populates `_offset` and `_permute`
+correctly for this displacement.
+
 ### substituteDir
 
 Recursively replaces `ident("mu")` with `Direction(d)` in the AST:
@@ -430,9 +469,24 @@ transforms field accesses into view + stencil operations.
 3. **Chained bracket shifted read** (gauge fields):
    - `U[mu][n >> +mu]` → same but with `U_view[int(mu)][se.offset]`
 
-4. **Unshifted read**:
-   - `phi[n]` → `phi_view[n]`
-   - `U[mu][n]` → `U_view[int(mu)][n]`
+4. **Unshifted read** (read/fixed fields go through stencil; write fields use direct view):
+   - `phi[n]` (read field) → zero-displacement stencil lookup + permuted read:
+   ```nim
+   block:
+     let se = stencilView.entry(zeroIndex, n)
+     coalescedReadGeneralPermute(phi_view[se.offset], se.permute, nd)
+   ```
+   - `U[mu][n]` (read field) → same with chained bracket:
+   ```nim
+   block:
+     let se = stencilView.entry(zeroIndex, n)
+     coalescedReadGeneralPermute(U_view[int(mu)][se.offset], se.permute, nd)
+   ```
+   - `psi[n]` (write field) → `psi_view[n]` (direct view, unchanged)
+   - `W[mu][n]` (write field) → `W_view[int(mu)][n]` (direct view, unchanged)
+
+   The `zeroIndex` is the `baseIndex` of the zero-displacement stencil entry
+   (see [Step 6: Zero-displacement entry](#zero-displacement-entry-for-unshifted-reads)).
 
 5. **Compound assignment** (+=, -=, *=):
    - `psi[n] += val` → `coalescedWrite(psi_view[n], psi_view[n] + val)`
@@ -549,12 +603,15 @@ macro stencil*(gridVar: untyped; depth: untyped; body: untyped): untyped =
 
 ### Generated code structure
 
+For `psi[n] = phi[n >> +T]`:
+
 ```nim
 block:
   var cell = grid.newPaddedCell(depth = cint(depthVal))
   let paddedGrid = cell.paddedGrid()
   var grimShifts = newSeq[seq[int]](numShifts)
-  grimShifts[0] = +T   # evaluates to @[0,0,0,1]
+  grimShifts[0] = +T              # evaluates to @[0,0,0,1]
+  grimShifts[1] = newSeq[int](nd) # zero displacement @[0,0,0,0]
   var stencilObj = paddedGrid.newGeneralLocalStencil(grimShifts)
   var phi_padded = cell.exchange(phi)    # pad + MPI halo
   var psi_padded = cell.exchange(psi)    # allocate padded buffer
@@ -563,11 +620,36 @@ block:
     var phi_view = phi_padded.view(AcceleratorRead)
     var psi_view = psi_padded.view(AcceleratorWrite)
     for n in sites(paddedGrid):
-      let se = stencilView.entry(0, n)
+      let se = stencilView.entry(0, n)           # shifted read (+T)
       coalescedWrite(psi_view[n],
         coalescedReadGeneralPermute(phi_view[se.offset], se.permute, nd))
   psi = cell.extract(psi_padded)         # copy interior back
 ```
+
+For `psi[n] = phi[n]` (unshifted read — still goes through stencil):
+
+```nim
+block:
+  var cell = grid.newPaddedCell(depth = cint(depthVal))
+  let paddedGrid = cell.paddedGrid()
+  var grimShifts = newSeq[seq[int]](numShifts)
+  grimShifts[0] = newSeq[int](nd) # zero displacement @[0,0,0,0]
+  var stencilObj = paddedGrid.newGeneralLocalStencil(grimShifts)
+  var phi_padded = cell.exchange(phi)
+  var psi_padded = cell.exchange(psi)
+  accelerator:
+    var stencilView = stencilObj.view(AcceleratorRead)
+    var phi_view = phi_padded.view(AcceleratorRead)
+    var psi_view = psi_padded.view(AcceleratorWrite)
+    for n in sites(paddedGrid):
+      let se = stencilView.entry(0, n)           # zero-displacement entry
+      coalescedWrite(psi_view[n],
+        coalescedReadGeneralPermute(phi_view[se.offset], se.permute, nd))
+  psi = cell.extract(psi_padded)
+```
+
+**Note**: Write field access (`psi_view[n]`) is always direct — no stencil
+lookup. Only reads go through the stencil.
 
 ### Depth handling
 
@@ -847,6 +929,13 @@ in setup (non-generic) or apply body (generic).
 Grid's PaddedCell marks single-processor dimensions with `islocal=1`.
 The stencil `GetEntry` sets `_permute` bit for these. Always use
 `coalescedReadGeneralPermute` to handle permute correctly, even on 1 rank.
+
+**This applies to unshifted reads too.** A zero-displacement stencil entry
+still goes through `GetEntry`, which may set `_permute` for local
+dimensions. Therefore `phi[n]` on a read field cannot simply become
+`phi_view[n]` — it must use the stencil to get the correct offset and
+permute bits. Only write-side accesses (`coalescedWrite(psi_view[n], ...)`)
+are safe to index directly because writes don't need permutation.
 
 ### 8. Write field allocation
 

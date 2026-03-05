@@ -33,8 +33,11 @@ header()
 
 type
   GeneralLocalStencilView* {.importcpp: "Grid::GeneralLocalStencilView", grid.} = object 
+    ## Wraps a `Grid::GeneralLocalStencilView`
   GeneralLocalStencil* {.importcpp: "Grid::GeneralLocalStencil", grid.} = object
+    ## Wraps a `Grid::GeneralLocalStencil`
   GeneralStencilEntry* {.importcpp: "Grid::GeneralStencilEntry", grid.} = object
+    ## Wraps a `Grid::GeneralStencilEntry`
 
 #[ constructor and destroy hook ]#
 
@@ -47,26 +50,36 @@ template newGeneralLocalStencil*(
   grid: var Cartesian | var RedBlackCartesian;
   shifts: seq[Coordinate]
 ): untyped =
+  ## Creates a `GeneralLocalStencil` on `grid` for the given displacement
+  ## vectors (as ``seq[Coordinate]``).
   newGeneralLocalStencil(cast[ptr Base](addr grid), shifts.toVector())
 
 template newGeneralLocalStencil*(
   grid: ptr Base | ptr Cartesian | ptr RedBlackCartesian;
   shifts: seq[Coordinate]
-): untyped = newGeneralLocalStencil(cast[ptr Base](grid), shifts.toVector())
+): untyped =
+  ## Creates a `GeneralLocalStencil` on `grid` for the given displacement vectors 
+  ## (as ``seq[Coordinate]``).
+  newGeneralLocalStencil(cast[ptr Base](grid), shifts.toVector())
 
 template newGeneralLocalStencil*(
   grid: var Cartesian | var RedBlackCartesian;
   shifts: seq[seq[int]]
 ): untyped =
+  ## Creates a `GeneralLocalStencil` on `grid` from raw integer shift
+  ## vectors. Each inner ``seq[int]`` has ``nd`` elements.
   newGeneralLocalStencil(cast[ptr Base](addr grid), shifts.toShifts().toVector())
 
 template newGeneralLocalStencil*(
   grid: ptr Base | ptr Cartesian | ptr RedBlackCartesian;
   shifts: seq[seq[int]]
-): untyped = newGeneralLocalStencil(cast[ptr Base](grid), shifts.toShifts().toVector())
+): untyped =
+  ## Creates a `GeneralLocalStencil` on `grid` from raw integer shift vectors.
+  newGeneralLocalStencil(cast[ptr Base](grid), shifts.toShifts().toVector())
 
 proc view*(stencil: GeneralLocalStencil; mode: ViewMode): GeneralLocalStencilView 
   {.importcpp: "#.View(#)", grid.}
+  ## Returns a `GeneralLocalStencilView` for use inside a dispatch loop.
 
 proc viewClose(stencil: GeneralLocalStencilView) {.importcpp: "#.ViewClose()", grid.}
 

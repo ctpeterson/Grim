@@ -37,7 +37,16 @@ import stencil
 header()
 
 macro newViewType*(name: untyped): untyped =
-  # I am using a metaprogramming trick here. The untyped argument `name` is the base,
+  ## Generates a lattice field view type triple (base, D, F), the
+  ## corresponding site-level ``vector_object`` types, and all associated
+  ## operations from a single base name.
+  ##
+  ## For example, ``newViewType(LatticeReal)`` expands to:
+  ## - View types: ``LatticeRealView``, ``LatticeRealDView``, ``LatticeRealFView``
+  ## - Site types: ``SiteReal``, ``SiteRealD``, ``SiteRealF``
+  ## - ``view(field, mode)`` constructors and ``=destroy`` hooks
+  ## - ``[]`` read accessor, site-level ``+``, ``-``, ``*``, ``+=``, ``-=``, ``*=``
+  #
   # and from it I generate type definitions and constructors for that base type. As
   # such, a call like `newFieldType(LatticeReal)` evaluates to:
   #
@@ -161,38 +170,57 @@ newViewType(LatticeSpinColorMatrix)
 
 type
   RealFieldView* = LatticeRealView | LatticeRealDView | LatticeRealFView
+    ## Type union of all real-valued lattice field views.
   ComplexFieldView* = LatticeComplexView | LatticeComplexDView | LatticeComplexFView
+    ## Type union of all complex-valued lattice field views.
 
 type
   ColorMatrixView* = LatticeColorMatrixView | LatticeColorMatrixDView | LatticeColorMatrixFView
+    ## Type union of all color-matrix lattice field views.
   SpinColorMatrixView* = LatticeSpinColorMatrixView | LatticeSpinColorMatrixDView | LatticeSpinColorMatrixFView
+    ## Type union of all spin-color-matrix lattice field views.
   ColorVectorView* = LatticeColorVectorView | LatticeColorVectorDView | LatticeColorVectorFView
+    ## Type union of all color-vector lattice field views.
   SpinColorVectorView* = LatticeSpinColorVectorView | LatticeSpinColorVectorDView | LatticeSpinColorVectorFView
+    ## Type union of all spin-color-vector lattice field views.
 
 type
   GaugeFieldView* = Vector[LatticeColorMatrixView] | Vector[LatticeColorMatrixDView] | Vector[LatticeColorMatrixFView]
+    ## Type union of gauge field views (one color-matrix view per direction).
   BosonFieldView* = LatticeColorVectorView | LatticeColorVectorDView | LatticeColorVectorFView
+    ## Type union of boson field views.
   FermionFieldView* = LatticeSpinColorVectorView | LatticeSpinColorVectorDView | LatticeSpinColorVectorFView
+    ## Type union of fermion field views.
 
 type
   RealFieldSite* = SiteReal | SiteRealD | SiteRealF
+    ## Type union of all real-valued site objects.
   ComplexFieldSite* = SiteComplex | SiteComplexD | SiteComplexF
+    ## Type union of all complex-valued site objects.
 
 type
   ColorMatrixSite* = SiteColorMatrix | SiteColorMatrixD | SiteColorMatrixF
+    ## Type union of all color-matrix site objects.
   SpinColorMatrixSite* = SiteSpinColorMatrix | SiteSpinColorMatrixD | SiteSpinColorMatrixF
+    ## Type union of all spin-color-matrix site objects.
   ColorVectorSite* = SiteColorVector | SiteColorVectorD | SiteColorVectorF
+    ## Type union of all color-vector site objects.
   SpinColorVectorSite* = SiteSpinColorVector | SiteSpinColorVectorD | SiteSpinColorVectorF
+    ## Type union of all spin-color-vector site objects.
 
 type
   FieldView* = RealFieldView | ComplexFieldView | ColorMatrixView | SpinColorMatrixView | ColorVectorView | SpinColorVectorView | GaugeFieldView | BosonFieldView | FermionFieldView
+    ## Type union of every lattice field view type.
 
 type
   FieldSite* = RealFieldSite | ComplexFieldSite | ColorMatrixSite | SpinColorMatrixSite | ColorVectorSite | SpinColorVectorSite
+    ## Type union of every site-level value type.
 
 #[ view constructors ]#
 
 template view*[T](fields: var Vector[T], mode: ViewMode): untyped =
+  ## Creates a ``Vector`` of views from a ``Vector`` of fields
+  ## (e.g. a gauge field). Each component is opened with `mode`.
   block:
     var views = newVector[typeof(fields[0.cint].view(mode))]()
     views.reserve(fields.size())

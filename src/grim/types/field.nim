@@ -34,7 +34,14 @@ import grid
 header()
 
 macro newFieldType*(name: untyped): untyped =
-  # I am using a metaprogramming trick here. The untyped argument `name` is the base,
+  ## Generates a lattice field type triple (base, D, F) and their
+  ## constructors from a single base name.
+  ##
+  ## For example, ``newFieldType(LatticeReal)`` expands to:
+  ## - Types: ``LatticeReal``, ``LatticeRealD``, ``LatticeRealF``
+  ## - Constructors: ``newLatticeReal(grid)``, ``newLatticeRealD(grid)``,
+  ##   ``newLatticeRealF(grid)`` (both ``ptr`` and ``var`` overloads)
+  #
   # and from it I generate type definitions and constructors for that base type. As
   # such, a call like `newFieldType(LatticeReal)` evaluates to:
   #
@@ -84,6 +91,20 @@ macro newFieldType*(name: untyped): untyped =
       `newNameD`(addr g)
     template `newNameF`*(g: var Base | var Cartesian | var RedBlackCartesian): `nameF` = 
       `newNameF`(addr g)
+    
+    proc exchange*(cell: PaddedCell; src: `name`): `name` 
+      {.importcpp: "#.Exchange(#)", grid.}
+    proc exchange*(cell: PaddedCell; src: `nameD`): `nameD` 
+      {.importcpp: "#.Exchange(#)", grid.}
+    proc exchange*(cell: PaddedCell; src: `nameF`): `nameF` 
+      {.importcpp: "#.Exchange(#)", grid.}
+    
+    proc extract*(cell: PaddedCell; src: `name`): `name`
+      {.importcpp: "#.Extract(#)", grid.}
+    proc extract*(cell: PaddedCell; src: `nameD`): `nameD`
+      {.importcpp: "#.Extract(#)", grid.}
+    proc extract*(cell: PaddedCell; src: `nameF`): `nameF`
+      {.importcpp: "#.Extract(#)", grid.}
 
 newFieldType(LatticeReal)
 newFieldType(LatticeComplex)
@@ -96,26 +117,35 @@ newFieldType(LatticeSpinColorMatrix)
 
 type
   RealField* = LatticeReal | LatticeRealD | LatticeRealF
+    ## Type union of all real-valued lattice fields.
   ComplexField* = LatticeComplex | LatticeComplexD | LatticeComplexF
+    ## Type union of all complex-valued lattice fields.
 
 type
   GaugeField* = Vector[LatticeColorMatrix] | Vector[LatticeColorMatrixD] | Vector[LatticeColorMatrixF]
+    ## Type union of gauge fields (one color matrix per direction).
   BosonField* = LatticeColorVector | LatticeColorVectorD | LatticeColorVectorF
+    ## Type union of boson (color-vector) fields.
   FermionField* = LatticeSpinColorVector | LatticeSpinColorVectorD | LatticeSpinColorVectorF
+    ## Type union of fermion (spin-color-vector) fields.
 
 #[ constructors ]#
 
 template newRealField*(grid: ptr Grid): untyped =
+  ## Creates a real-valued lattice field at `DefaultPrecision` on `grid`.
   when DefaultPrecision == 32: newLatticeRealF(grid)
   elif DefaultPrecision == 64: newLatticeRealD(grid)
   else: newLatticeReal(grid)
 
 template newComplexField*(grid: ptr Grid): untyped =
+  ## Creates a complex-valued lattice field at `DefaultPrecision` on `grid`.
   when DefaultPrecision == 32: newLatticeComplexF(grid)
   elif DefaultPrecision == 64: newLatticeComplexD(grid)
   else: newLatticeComplex(grid)
 
 template newGaugeField*(grid: ptr Grid): untyped =
+  ## Creates a gauge field (``Vector`` of ``nd`` color matrices) at
+  ## `DefaultPrecision` on `grid`.
   block:
     when DefaultPrecision == 32:
       var gf = newVector[LatticeColorMatrixF]()
@@ -131,29 +161,45 @@ template newGaugeField*(grid: ptr Grid): untyped =
       for mu in 0..<nd: gf.push_back newLatticeColorMatrix(grid)
     gf
 
+template exchange*[T](cell: PaddedCell; src: Vector[T]): untyped =
+  ## Halo exchange on gauge field
+  block:
+    var dest = newVector[T]()
+    dest.reserve(src.size())
+    for mu in 0.cint..<src.size():
+      dest.push_back cell.exchange(src[mu])
+    dest
+
 template newBosonField*(grid: ptr Grid): untyped =
+  ## Creates a boson (color-vector) lattice field at `DefaultPrecision` on `grid`.
   when DefaultPrecision == 32: newLatticeColorVectorF(grid)
   elif DefaultPrecision == 64: newLatticeColorVectorD(grid)
   else: newLatticeColorVector(grid)
 
 template newFermionField*(grid: ptr Grid): untyped =
+  ## Creates a fermion (spin-color-vector) lattice field at `DefaultPrecision` on `grid`.
   when DefaultPrecision == 32: newLatticeSpinColorVectorF(grid)
   elif DefaultPrecision == 64: newLatticeSpinColorVectorD(grid)
   else: newLatticeSpinColorVector(grid)
 
 template newRealField*(grid: var Grid): untyped =
+  ## Convenience overload: creates a real field from a ``var Grid``.
   newRealField(addr grid)
 
 template newComplexField*(grid: var Grid): untyped =
+  ## Convenience overload: creates a complex field from a ``var Grid``.
   newComplexField(addr grid)
 
 template newGaugeField*(grid: var Grid): untyped =
+  ## Convenience overload: creates a gauge field from a ``var Grid``.
   newGaugeField(addr grid)
 
 template newBosonField*(grid: var Grid): untyped =
+  ## Convenience overload: creates a boson field from a ``var Grid``.
   newBosonField(addr grid)
 
 template newFermionField*(grid: var Grid): untyped =
+  ## Convenience overload: creates a fermion field from a ``var Grid``.
   newFermionField(addr grid)
 
 when isMainModule:

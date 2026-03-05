@@ -29,84 +29,113 @@
 #[ std::vector<T> wrapper ]#
 
 type Vector*[T] {.importcpp: "std::vector", header: "<vector>", bycopy.} = object
+  ## Nim wrapper around C++ ``std::vector<T>``. Passed by copy at the
+  ## Nim level (``bycopy``), which is safe because Grid routinely passes
+  ## small vectors by value.
 
 proc newVector*[T](): Vector[T] 
   {.importcpp: "std::vector<'*0>()", header: "<vector>", constructor.}
+  ## Creates an empty ``Vector[T]``.
 
 proc newVector*[T](n: cint): Vector[T] 
   {.importcpp: "std::vector<'*0>(@)", header: "<vector>", constructor.}
+  ## Creates a ``Vector[T]`` with `n` default-initialized elements.
 
 proc newVector*[T](n: cint, val: T): Vector[T] 
   {.importcpp: "std::vector<'*0>(@)", header: "<vector>", constructor.}
+  ## Creates a ``Vector[T]`` with `n` copies of `val`.
 
 proc size*[T](v: Vector[T]): cint {.importcpp: "#.size()", header: "<vector>".}
+  ## Returns the number of elements as ``cint``.
 
 proc len*[T](v: Vector[T]): int = int(v.size())
+  ## Returns the number of elements as Nim ``int``.
 
 proc `[]`*[T](v: Vector[T], i: cint): T 
   {.importcpp: "#[#]", header: "<vector>".}
+  ## Returns element at index `i` (``cint`` overload).
 
 proc `[]`*[T](v: Vector[T], i: int): T 
   {.importcpp: "#[(int)#]", header: "<vector>".}
+  ## Returns element at index `i` (``int`` overload).
 
 proc `[]`*[T](v: var Vector[T], i: cint): var T 
   {.importcpp: "#[#]", header: "<vector>".}
+  ## Returns a mutable reference to element at index `i` (``cint`` overload).
 
 proc `[]`*[T](v: var Vector[T], i: int): var T 
   {.importcpp: "#[(int)#]", header: "<vector>".}
+  ## Returns a mutable reference to element at index `i` (``int`` overload).
 
 proc `[]=`*[T](v: var Vector[T], i: cint, val: T) 
   {.importcpp: "#[#] = @", header: "<vector>".}
+  ## Assigns `val` to element at index `i` (``cint`` overload).
 
 proc `[]=`*[T](v: var Vector[T], i: int, val: T) 
   {.importcpp: "#[(int)#] = @", header: "<vector>".}
+  ## Assigns `val` to element at index `i` (``int`` overload).
 
 proc push_back*[T](v: var Vector[T], val: T) 
   {.importcpp: "#.push_back(@)", header: "<vector>".}
+  ## Appends `val` to the end of the vector.
 
 proc pop_back*[T](v: var Vector[T]) 
   {.importcpp: "#.pop_back()", header: "<vector>".}
+  ## Removes the last element from the vector.
 
 proc clear*[T](v: var Vector[T]) 
   {.importcpp: "#.clear()", header: "<vector>".}
+  ## Removes all elements from the vector.
 
 proc resize*[T](v: var Vector[T], n: cint) 
   {.importcpp: "#.resize(@)", header: "<vector>".}
+  ## Resizes the vector to contain `n` elements.
 
 proc reserve*[T](v: var Vector[T], n: cint) 
   {.importcpp: "#.reserve(@)", header: "<vector>".}
+  ## Reserves capacity for at least `n` elements without changing size.
 
 proc empty*[T](v: Vector[T]): bool 
   {.importcpp: "#.empty()", header: "<vector>".}
+  ## Returns ``true`` if the vector has no elements.
 
 proc front*[T](v: Vector[T]): T 
   {.importcpp: "#.front()", header: "<vector>".}
+  ## Returns the first element.
 
 proc back*[T](v: Vector[T]): T 
   {.importcpp: "#.back()", header: "<vector>".}
+  ## Returns the last element.
 
 proc data*[T](v: Vector[T]): ptr T 
   {.importcpp: "#.data()", header: "<vector>".}
+  ## Returns a raw pointer to the underlying contiguous storage.
 
 #[ iterator support ]#
 
 iterator items*[T](v: Vector[T]): T =
+  ## Iterates over all elements of the vector by value.
   for i in 0.cint ..< v.size(): yield v[i]
 
 iterator pairs*[T](v: Vector[T]): (int, T) =
+  ## Iterates over all ``(index, value)`` pairs of the vector.
   for i in 0.cint ..< v.size(): yield (int(i), v[i])
 
 #[ seq <-> Vector conversion ]#
 
 proc toVector*[T](s: seq[T]): Vector[T] =
+  ## Converts a Nim ``seq[T]`` to a ``Vector[T]``.
   result = newVector[T](cint(s.len))
   for i in 0.cint ..< cint(s.len): result[i] = s[i]
 
 proc toSeq*[T](v: Vector[T]): seq[T] =
+  ## Converts a ``Vector[T]`` to a Nim ``seq[T]``.
   result = newSeq[T](v.len)
   for i in 0.cint ..< v.size(): result[i] = v[i]
 
 proc `$`*[T](v: Vector[T]): string =
+  ## Returns a string representation of the vector, matching Nim ``seq``
+  ## style: ``@[1, 2, 3]``.
   result = "@["
   for i in 0.cint ..< v.size():
     if i > 0: result.add(", ")

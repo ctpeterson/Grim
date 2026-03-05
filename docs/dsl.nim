@@ -312,6 +312,19 @@ proc collectShifts(n: NimNode; shiftMap: var Table[string, ShiftEntry];
   for child in n:
     collectShifts(child, shiftMap, shiftList, knownDirs)
 
+const zeroShiftKey* = "__zero_disp__"
+
+proc addZeroDisplacement*(shiftMap: var Table[string, ShiftEntry];
+                          shiftList: var seq[NimNode]) =
+  ## Append a zero-displacement stencil entry so that unshifted reads on
+  ## read/fixed fields also go through coalescedReadGeneralPermute.
+  ## PaddedCell may set permute bits even for zero displacement.
+  if zeroShiftKey notin shiftMap:
+    let idx = shiftList.len
+    shiftList.add(quote do: newSeq[int](nd))
+    shiftMap[zeroShiftKey] = ShiftEntry(
+      kind: skConstant, baseIndex: idx, varNames: @[])
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Build shift-index expression
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -469,12 +482,16 @@ proc rewriteFieldAccess(
               let se = `stencilViewSym`.entry(`indexExpr`, `siteArg`)
               coalescedReadGeneralPermute(`viewIdent`[`muInt`][se.offset], se.permute, nd)
 
-      # No shift: field[mu][n] → read from view
+      # No shift: field[mu][n] → zero-disp stencil lookup + permuted read
       let rewrittenSite = rewriteFieldAccess(
         siteExpr, shiftMap, readFields, writeFields, stencilViewSym)
       let muInt = newCall(ident"int", muArg)
+      let zeroEntry = shiftMap[zeroShiftKey]
+      let zeroIdx = buildIndexExpr(zeroEntry)
       return quote do:
-        `viewIdent`[`muInt`][`rewrittenSite`]
+        block:
+          let se = `stencilViewSym`.entry(`zeroIdx`, `rewrittenSite`)
+          coalescedReadGeneralPermute(`viewIdent`[`muInt`][se.offset], se.permute, nd)
 
     if fieldName in writeFields:
       let viewIdent = ident(fieldName & "_view")
@@ -502,11 +519,15 @@ proc rewriteFieldAccess(
               let se = `stencilViewSym`.entry(`indexExpr`, `siteArg`)
               coalescedReadGeneralPermute(`viewIdent`[se.offset], se.permute, nd)
 
-      # No shift: field[n] → view[n]
+      # No shift: field[n] → zero-disp stencil lookup + permuted read
       let rewrittenSite = rewriteFieldAccess(
         siteExpr, shiftMap, readFields, writeFields, stencilViewSym)
+      let zeroEntry = shiftMap[zeroShiftKey]
+      let zeroIdx = buildIndexExpr(zeroEntry)
       return quote do:
-        `viewIdent`[`rewrittenSite`]
+        block:
+          let se = `stencilViewSym`.entry(`zeroIdx`, `rewrittenSite`)
+          coalescedReadGeneralPermute(`viewIdent`[se.offset], se.permute, nd)
 
     if fieldName in writeFields:
       let viewIdent = ident(fieldName & "_view")
@@ -673,6 +694,7 @@ proc stencilAnonymousImpl(gridVar, depthExpr: NimNode; body: NimNode): NimNode =
   var shiftExprs: seq[NimNode]
   for dblock in parsed.dispatchBlocks:
     collectShifts(dblock[1], shiftMap, shiftExprs, knownDirs)
+  addZeroDisplacement(shiftMap, shiftExprs)
 
   # Determine depth: use explicit if given, otherwise infer from shifts
   let depthVal = if depthExpr.kind == nnkEmpty:
@@ -799,6 +821,7 @@ macro stencil*(firstArg: untyped; body: untyped): untyped =
   var shiftExprs: seq[NimNode]
   for dblock in parsed.dispatchBlocks:
     collectShifts(dblock[1], shiftMap, shiftExprs, knownDirs)
+  addZeroDisplacement(shiftMap, shiftExprs)
 
   # Determine depth
   let depthVal = if depthExpr.kind == nnkEmpty:
