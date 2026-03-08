@@ -29,13 +29,10 @@
 import grid            # base Grid API
 
 import types/[stencil]  # general local stencil
-import dsl/[stencildsl] # stencil DSL
-
-import types/[field]   # field types
-import types/[view]    # field views
+import types/[fielddsl] # field types
+import types/[view]     # field views
 
 export grid
 export stencil
-export stencildsl
-export field
+export fielddsl
 export view

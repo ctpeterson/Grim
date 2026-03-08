@@ -72,8 +72,6 @@ macro newViewType*(name: untyped): untyped =
   let cppSite  = "typename Grid::" & cppBase & "::vector_object"
   let cppSiteD = "typename Grid::" & cppBase & "D::vector_object"
   let cppSiteF = "typename Grid::" & cppBase & "F::vector_object"
-  let opGet = ident"[]"
-  let opSet = ident"[]="
   let opAdd = ident"+"
   let opSub = ident"-"
   let opMul = ident"*"
@@ -117,9 +115,9 @@ macro newViewType*(name: untyped): untyped =
     proc `=destroy`(v: var `viewNameF`) = v.viewClose()
 
     # read accessor
-    proc `opGet`*(v: `viewName`; idx: uint64): `siteName` {.importcpp: "#[@]", grid.}
-    proc `opGet`*(v: `viewNameD`; idx: uint64): `siteNameD` {.importcpp: "#[@]", grid.}
-    proc `opGet`*(v: `viewNameF`; idx: uint64): `siteNameF` {.importcpp: "#[@]", grid.}
+    proc get*(v: `viewName`; idx: uint64): `siteName` {.importcpp: "#[@]", grid.}
+    proc get*(v: `viewNameD`; idx: uint64): `siteNameD` {.importcpp: "#[@]", grid.}
+    proc get*(v: `viewNameF`; idx: uint64): `siteNameF` {.importcpp: "#[@]", grid.}
 
     # write accessor
     #proc `opSet`*(v: var `viewName`; idx: uint64; val: `siteName`) {.importcpp: "#[#] = #", grid.}
@@ -140,6 +138,30 @@ macro newViewType*(name: untyped): untyped =
     proc `opMul`*(a, b: `siteName`): `siteName` {.importcpp: "(# * #)", grid.}
     proc `opMul`*(a, b: `siteNameD`): `siteNameD` {.importcpp: "(# * #)", grid.}
     proc `opMul`*(a, b: `siteNameF`): `siteNameF` {.importcpp: "(# * #)", grid.}
+
+    # mixed scalar arithmetic: scalar * site, site * scalar
+    proc `opMul`*(a: float64; b: `siteName`): `siteName` {.importcpp: "(# * #)", grid.}
+    proc `opMul`*(a: `siteName`; b: float64): `siteName` {.importcpp: "(# * #)", grid.}
+    proc `opMul`*(a: float64; b: `siteNameD`): `siteNameD` {.importcpp: "(# * #)", grid.}
+    proc `opMul`*(a: `siteNameD`; b: float64): `siteNameD` {.importcpp: "(# * #)", grid.}
+    proc `opMul`*(a: float32; b: `siteNameF`): `siteNameF` {.importcpp: "(# * #)", grid.}
+    proc `opMul`*(a: `siteNameF`; b: float32): `siteNameF` {.importcpp: "(# * #)", grid.}
+
+    # mixed scalar arithmetic: scalar + site, site + scalar
+    proc `opAdd`*(a: float64; b: `siteName`): `siteName` {.importcpp: "(# + #)", grid.}
+    proc `opAdd`*(a: `siteName`; b: float64): `siteName` {.importcpp: "(# + #)", grid.}
+    proc `opAdd`*(a: float64; b: `siteNameD`): `siteNameD` {.importcpp: "(# + #)", grid.}
+    proc `opAdd`*(a: `siteNameD`; b: float64): `siteNameD` {.importcpp: "(# + #)", grid.}
+    proc `opAdd`*(a: float32; b: `siteNameF`): `siteNameF` {.importcpp: "(# + #)", grid.}
+    proc `opAdd`*(a: `siteNameF`; b: float32): `siteNameF` {.importcpp: "(# + #)", grid.}
+
+    # mixed scalar arithmetic: site - scalar, scalar - site
+    proc `opSub`*(a: float64; b: `siteName`): `siteName` {.importcpp: "(# - #)", grid.}
+    proc `opSub`*(a: `siteName`; b: float64): `siteName` {.importcpp: "(# - #)", grid.}
+    proc `opSub`*(a: float64; b: `siteNameD`): `siteNameD` {.importcpp: "(# - #)", grid.}
+    proc `opSub`*(a: `siteNameD`; b: float64): `siteNameD` {.importcpp: "(# - #)", grid.}
+    proc `opSub`*(a: float32; b: `siteNameF`): `siteNameF` {.importcpp: "(# - #)", grid.}
+    proc `opSub`*(a: `siteNameF`; b: float32): `siteNameF` {.importcpp: "(# - #)", grid.}
 
     # arithmetic: unary negation
     proc `opSub`*(a: `siteName`): `siteName` {.importcpp: "(-#)", grid.}
@@ -168,6 +190,8 @@ newViewType(LatticeSpinColorVector)
 newViewType(LatticeColorMatrix)
 newViewType(LatticeSpinColorMatrix)
 
+newViewType(LatticeGaugeField)
+
 type
   RealFieldView* = LatticeRealView | LatticeRealDView | LatticeRealFView
     ## Type union of all real-valued lattice field views.
@@ -175,22 +199,18 @@ type
     ## Type union of all complex-valued lattice field views.
 
 type
-  ColorMatrixView* = LatticeColorMatrixView | LatticeColorMatrixDView | LatticeColorMatrixFView
-    ## Type union of all color-matrix lattice field views.
-  SpinColorMatrixView* = LatticeSpinColorMatrixView | LatticeSpinColorMatrixDView | LatticeSpinColorMatrixFView
-    ## Type union of all spin-color-matrix lattice field views.
-  ColorVectorView* = LatticeColorVectorView | LatticeColorVectorDView | LatticeColorVectorFView
-    ## Type union of all color-vector lattice field views.
-  SpinColorVectorView* = LatticeSpinColorVectorView | LatticeSpinColorVectorDView | LatticeSpinColorVectorFView
-    ## Type union of all spin-color-vector lattice field views.
+  GaugeFieldView* = LatticeGaugeFieldView | LatticeGaugeFieldDView | LatticeGaugeFieldFView
+    ## Type union of all gauge field (Lorentz-indexed color matrix) views
+  GaugeLinkFieldView* = LatticeColorMatrixView | LatticeColorMatrixDView | LatticeColorMatrixFView
+    ## Type union of all gauge link field (color matrix) views
+  BosonFieldView* = LatticeColorVectorView | LatticeColorVectorDView | LatticeColorVectorFView
+    ## Type union of all boson (color-vector) field views.
+  FermionFieldView* = LatticeSpinColorVectorView | LatticeSpinColorVectorDView | LatticeSpinColorVectorFView
+    ## Type union of all fermion (spin-color-vector) field views.
 
 type
-  GaugeFieldView* = Vector[LatticeColorMatrixView] | Vector[LatticeColorMatrixDView] | Vector[LatticeColorMatrixFView]
-    ## Type union of gauge field views (one color-matrix view per direction).
-  BosonFieldView* = LatticeColorVectorView | LatticeColorVectorDView | LatticeColorVectorFView
-    ## Type union of boson field views.
-  FermionFieldView* = LatticeSpinColorVectorView | LatticeSpinColorVectorDView | LatticeSpinColorVectorFView
-    ## Type union of fermion field views.
+  FieldView* = RealFieldView | ComplexFieldView | GaugeFieldView | GaugeLinkFieldView | BosonFieldView | FermionFieldView
+    ## Type union of all lattice field view types.
 
 type
   RealFieldSite* = SiteReal | SiteRealD | SiteRealF
@@ -199,47 +219,38 @@ type
     ## Type union of all complex-valued site objects.
 
 type
-  ColorMatrixSite* = SiteColorMatrix | SiteColorMatrixD | SiteColorMatrixF
-    ## Type union of all color-matrix site objects.
-  SpinColorMatrixSite* = SiteSpinColorMatrix | SiteSpinColorMatrixD | SiteSpinColorMatrixF
-    ## Type union of all spin-color-matrix site objects.
-  ColorVectorSite* = SiteColorVector | SiteColorVectorD | SiteColorVectorF
-    ## Type union of all color-vector site objects.
-  SpinColorVectorSite* = SiteSpinColorVector | SiteSpinColorVectorD | SiteSpinColorVectorF
-    ## Type union of all spin-color-vector site objects.
+  GaugeFieldSite* = SiteGaugeField | SiteGaugeFieldD | SiteGaugeFieldF
+    ## Type union of all gauge field (Lorentz-indexed color matrix) site objects.
+  GaugeLinkFieldSite* = SiteColorMatrix | SiteColorMatrixD | SiteColorMatrixF
+    ## Type union of all gauge link field (color matrix) site objects.
+  BosonFieldSite* = SiteColorVector | SiteColorVectorD | SiteColorVectorF
+    ## Type union of all boson (color-vector) field site objects.
+  FermionFieldSite* = SiteSpinColorVector | SiteSpinColorVectorD | SiteSpinColorVectorF
+    ## Type union of all fermion (spin-color-vector) field site objects.
 
 type
-  FieldView* = RealFieldView | ComplexFieldView | ColorMatrixView | SpinColorMatrixView | ColorVectorView | SpinColorVectorView | GaugeFieldView | BosonFieldView | FermionFieldView
-    ## Type union of every lattice field view type.
-
-type
-  FieldSite* = RealFieldSite | ComplexFieldSite | ColorMatrixSite | SpinColorMatrixSite | ColorVectorSite | SpinColorVectorSite
-    ## Type union of every site-level value type.
-
-#[ view constructors ]#
-
-template view*[T](fields: var Vector[T], mode: ViewMode): untyped =
-  ## Creates a ``Vector`` of views from a ``Vector`` of fields
-  ## (e.g. a gauge field). Each component is opened with `mode`.
-  block:
-    var views = newVector[typeof(fields[0.cint].view(mode))]()
-    views.reserve(fields.size())
-    for mu in 0.cint..<fields.size(): views.push_back fields[mu].view(mode)
-    views
+  FieldSite* = RealFieldSite | ComplexFieldSite | GaugeFieldSite | GaugeLinkFieldSite | BosonFieldSite | FermionFieldSite
+    ## Type union of all lattice field site types.
 
 #[ read/write facilities ]#
 
-proc coalescedReadGeneralPermute*[V](vec: V; perm: uint8; ndim: int; lane: int = 0): V
+proc coalescedReadGeneralPermute*[V](vec: V; perm: uint8; ndim: int): V
   {.importcpp: "Grid::coalescedReadGeneralPermute(@)", grid.}
 
-proc coalescedWrite*[V](target: V; src: V)
+proc coalescedWrite[V](target: V; src: V)
   {.importcpp: "Grid::coalescedWrite(@)", grid.}
 
-template read*[T](entry: ptr GeneralStencilEntry; siteIdx: uint64; u: T): untyped =
-  coalescedReadGeneralPermute(u[entry.offset], entry.permute, nd)
+proc coalescedRead[V](vec: V): V
+  {.importcpp: "Grid::coalescedRead(@)", grid.}
+
+template `[]`*(view: FieldView; idx: uint64): untyped =
+  coalescedRead(view.get(idx))
+
+template `[]`*(view: FieldView; idx: ptr GeneralStencilEntry): untyped =
+  coalescedReadGeneralPermute(view.get(idx.offset), idx.permute, nd)
 
 template `[]=`*(target: FieldView; idx: uint64; val: FieldSite) =
-  coalescedWrite(target[idx], val)
+  coalescedWrite(target.get(idx), val)
 
 #[ test ]#
 
@@ -250,6 +261,7 @@ when isMainModule:
     var paddedGrid = cell.paddedGrid()
 
     var complex = paddedGrid.newComplexField()
+    var complex2 = paddedGrid.newComplexField()
     var gauge = paddedGrid.newGaugeField()
     var gauge2 = paddedGrid.newGaugeField()
 
@@ -259,12 +271,13 @@ when isMainModule:
     accelerator:
       var stencilView = stencil.view(AcceleratorRead)
       var complexView = complex.view(AcceleratorRead)
+      var complex2View = complex2.view(AcceleratorWrite)
       var gaugeView = gauge.view(AcceleratorRead)
       var gauge2View = gauge2.view(AcceleratorWrite)
 
       for n in sites(paddedGrid):
-        let se = stencilView.entry(0, n)
-        let complexVal = se.read(n): complexView
-        for mu in 0..<nd:
-          let gaugeVal = se.read(n): gaugeView[mu]
-          gauge2View[mu][n] = gaugeVal # coalesced write
+        let se = stencilView[0][n]
+        let complexVal = complexView[se]
+        let complexVal2 = complex2View[n]
+        complex2View[n] = complexVal + complexVal2
+

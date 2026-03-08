@@ -39,6 +39,13 @@ type
   GeneralStencilEntry* {.importcpp: "Grid::GeneralStencilEntry", grid.} = object
     ## Wraps a `Grid::GeneralStencilEntry`
 
+type
+  StencilShift* = object
+    ## Intermediate object returned by ``stencilView[shiftIdx]``.
+    ## Apply a second ``[siteIdx]`` to obtain the ``GeneralStencilEntry``.
+    view: ptr GeneralLocalStencilView
+    idx: int
+
 #[ constructor and destroy hook ]#
 
 proc newGeneralLocalStencil(
@@ -92,6 +99,12 @@ proc entry*[IA: SomeInteger, IB: SomeInteger](
   entryIdx: IA; 
   siteIdx: IB
 ): ptr GeneralStencilEntry {.importcpp: "#.GetEntry(#, #)", grid.}
+
+template `[]`*(stencil: GeneralLocalStencilView; entryIdx: SomeInteger): StencilShift =
+  StencilShift(view: addr stencil, idx: int(entryIdx))
+
+template `[]`*(ss: StencilShift; siteIdx: SomeInteger): ptr GeneralStencilEntry =
+  ss.view[].entry(ss.idx, siteIdx)
 
 proc offset*(entry: ptr GeneralStencilEntry): uint64
   {.importcpp: "#->_offset", grid.}

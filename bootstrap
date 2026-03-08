@@ -844,9 +844,9 @@ examples:
 
     # ── Communications ──────────────────────────────────────────────
     comm = p.add_argument_group("communications")
-    comm.add_argument("--comms", default="none",
+    comm.add_argument("--comms", default="mpi-auto",
                       choices=["none", "mpi", "mpi-auto", "mpi3", "mpi3-auto"],
-                      help="Communication backend (default: none)")
+                      help="Communication backend (default: mpi-auto)")
 
     # ── Accelerator (GPU) ───────────────────────────────────────────
     gpu = p.add_argument_group("accelerator / GPU")

@@ -41,8 +41,8 @@ const DefaultPrecision* {.intdefine.} = 64
   ## Default floating-point precision in bits (32 or 64).
   ## Override at compile time with ``-d:DefaultPrecision=32``.
 
-let nd* {.importcpp: "Grid::Nd", grid.}: int
-  ## Number of spacetime dimensions (imported from ``Grid::Nd``)
+const nd* = 4
+  ## Number of spacetime dimensions. Grid is always 4-dimensional.
 
 type
   Coordinate* {.importcpp: "Grid::Coordinate", grid, bycopy.} = object
@@ -78,6 +78,9 @@ type SitesKind* = enum
   globalSites  ## Total sites across all MPI ranks.
 
 type DispatchKind = enum dkAccelerator, dkHost
+
+type ComplexD* {.importcpp: "Grid::ComplexD", grid.} = object
+type ComplexF* {.importcpp: "Grid::ComplexF", grid.} = object
 
 #[ initialization/finalization ]#
 
@@ -240,6 +243,15 @@ macro grimPrint(args: varargs[untyped]): untyped =
       statements.add newCall("write", ident"stdout", newLit(" "))
     else: statements.add newCall("writeLine", ident"stdout", newCall(ident"$", varg))
   return newStmtList(statements)
+
+#[ Grid real/complex ]#
+
+proc re*(z: ComplexD): float64 {.importcpp: "#.real()", grid.}
+proc im*(z: ComplexD): float64 {.importcpp: "#.imag()", grid.}
+proc re*(z: ComplexF): float32 {.importcpp: "#.real()", grid.}
+proc im*(z: ComplexF): float32 {.importcpp: "#.imag()", grid.}
+
+#[ main API ]#
 
 const logo = """
 

@@ -33,6 +33,11 @@ type Vector*[T] {.importcpp: "std::vector", header: "<vector>", bycopy.} = objec
   ## Nim level (``bycopy``), which is safe because Grid routinely passes
   ## small vectors by value.
 
+type CppString* {.importcpp: "std::string", header: "<string>".} = object
+  ## Private helper: wraps C++ ``std::string`` for ``readLimeObject`` output.
+
+proc c_str*(s: CppString): cstring {.importcpp: "#.c_str()", header: "<string>", nodecl.}
+
 proc newVector*[T](): Vector[T] 
   {.importcpp: "std::vector<'*0>()", header: "<vector>", constructor.}
   ## Creates an empty ``Vector[T]``.
@@ -132,6 +137,11 @@ proc toSeq*[T](v: Vector[T]): seq[T] =
   ## Converts a ``Vector[T]`` to a Nim ``seq[T]``.
   result = newSeq[T](v.len)
   for i in 0.cint ..< v.size(): result[i] = v[i]
+
+proc toCInt*[T](v: Vector[T]): seq[cint] =
+  ## Converts a ``Vector[T]`` to a Nim ``seq[cint]`` by converting each element to ``cint``.
+  result = newSeq[cint](v.len)
+  for i in 0.cint ..< v.size(): result[i] = cint(v[i])
 
 proc `$`*[T](v: Vector[T]): string =
   ## Returns a string representation of the vector, matching Nim ``seq``

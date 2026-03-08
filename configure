@@ -153,11 +153,22 @@ EOF
 for flag in $GRID_CXXFLAGS; do
     echo "  passC = \"$flag\"" >> "$NIM_CFG"
 done
-for flag in $GRID_LDFLAGS; do
+
+# Collect unique -L directories so we can emit -rpath for each one.
+# This ensures the runtime linker can find shared libraries without
+# requiring LD_LIBRARY_PATH.
+declare -A _seen_libdirs
+for flag in $GRID_LDFLAGS $GRID_LIBS; do
     echo "  passL = \"$flag\"" >> "$NIM_CFG"
-done
-for flag in $GRID_LIBS; do
-    echo "  passL = \"$flag\"" >> "$NIM_CFG"
+    case "$flag" in
+        -L*)
+            _dir="${flag#-L}"
+            if [ -z "${_seen_libdirs[$_dir]+x}" ]; then
+                _seen_libdirs[$_dir]=1
+                echo "  passL = \"-Wl,-rpath,$_dir\"" >> "$NIM_CFG"
+            fi
+            ;;
+    esac
 done
 
 echo "-- Generated $NIM_CFG"
@@ -218,6 +229,12 @@ task list, "list available build targets in src/":
 task build, "compile a Nim source from src/":
   var passC = "-Ofast" + passC_Grid
   var passL = "-Wl,--start-group" + passL_Grid + "-Wl,--end-group"
+
+  # Inject -rpath for every -L directory so the runtime linker can find
+  # shared libraries without LD_LIBRARY_PATH.
+  for token in passL_Grid.splitWhitespace():
+    if token.startsWith("-L"):
+      passL += " -Wl,-rpath," & token[2..^1]
 
   # Arguments after "build": extra flags followed by target name (last arg)
   var args = newSeq[string](paramCount() - 2)
