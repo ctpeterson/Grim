@@ -39,6 +39,17 @@ type
   GeneralStencilEntry* {.importcpp: "Grid::GeneralStencilEntry", grid.} = object
     ## Wraps a `Grid::GeneralStencilEntry`
 
+#[
+type
+  NearestNeighborStencil* = object
+    ## Short-hand type for general local stencil with nearest-neighbor shifts
+    stencil: GeneralLocalStencil
+
+  NearestNeighborStencilView* = object
+    ## Short-hand type for general local stencil view with nearest-neighbor shifts
+    view: GeneralLocalStencilView  
+]#
+
 type
   StencilShift* = object
     ## Intermediate object returned by ``stencilView[shiftIdx]``.
@@ -77,12 +88,12 @@ template newGeneralLocalStencil*(
   ## vectors. Each inner ``seq[int]`` has ``nd`` elements.
   newGeneralLocalStencil(cast[ptr Base](addr grid), shifts.toShifts().toVector())
 
-template newGeneralLocalStencil*(
-  grid: ptr Base | ptr Cartesian | ptr RedBlackCartesian;
-  shifts: seq[seq[int]]
-): untyped =
+template newGeneralLocalStencil*(grid: ptr Grid; shifts: seq[seq[int]]): untyped =
   ## Creates a `GeneralLocalStencil` on `grid` from raw integer shift vectors.
   newGeneralLocalStencil(cast[ptr Base](grid), shifts.toShifts().toVector())
+
+#template newNearestNeighborStencil*(grid: var Grid): untyped =
+#  var shifts = newSeq[seq[int]](2*)
 
 proc view*(stencil: GeneralLocalStencil; mode: ViewMode): GeneralLocalStencilView 
   {.importcpp: "#.View(#)", grid.}

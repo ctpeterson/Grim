@@ -34,6 +34,9 @@ import rng
 
 header()
 
+let Even* {.importcpp: "Grid::Even", grid.}: cint
+let Odd* {.importcpp: "Grid::Odd", grid.}: cint
+
 macro newFieldType*(name: untyped): untyped =
   ## Generates a lattice field type triple (base, D, F) and their
   ## constructors from a single base name.
@@ -69,7 +72,7 @@ macro newFieldType*(name: untyped): untyped =
   let newName  = ident("new" & $name)
   let newNameD = ident("new" & $name & "D")
   let newNameF = ident("new" & $name & "F")
-  let cppBase = ($name).replace("Color", "Colour") #flippin' Brits
+  let cppBase = ($name).replace("Color", "Colour") # flippin' Brits ;)
   let cpp  = "Grid::" & cppBase
   let cppD = cpp & "D"
   let cppF = cpp & "F"
@@ -86,6 +89,10 @@ macro newFieldType*(name: untyped): untyped =
   let opAddEq = ident"+="
   let opSubEq = ident"-="
   let opMulEq = ident"*="
+  let cbGetter = ident"checkerboard"
+  let cbSetter = ident"checkerboard="
+  let evenSetter = ident"even="
+  let oddSetter = ident"odd="
 
   result = quote do:
     type 
@@ -112,16 +119,91 @@ macro newFieldType*(name: untyped): untyped =
     template `newNameF`*(g: var Grid): `nameF` = `newNameF`(addr g)
     
     # x.Grid() wrapper, preventing name conflict
-    proc layout*(field: var `name`): ptr Base {.importcpp: "#.Grid()", grid.}
-    proc layout*(field: var `nameD`): ptr Base {.importcpp: "#.Grid()", grid.}
-    proc layout*(field: var `nameF`): ptr Base {.importcpp: "#.Grid()", grid.}
+    proc base*(field: var `name`): ptr Base {.importcpp: "#.Grid()", grid.}
+    proc base*(field: var `nameD`): ptr Base {.importcpp: "#.Grid()", grid.}
+    proc base*(field: var `nameF`): ptr Base {.importcpp: "#.Grid()", grid.}
     
+    # checkerboard getter
+    proc `cbGetter`*(field: var `name`): cint 
+      {.importcpp: "#.Checkerboard()", grid.}
+    proc `cbGetter`*(field: var `nameD`): cint 
+      {.importcpp: "#.Checkerboard()", grid.}
+    proc `cbGetter`*(field: var `nameF`): cint 
+      {.importcpp: "#.Checkerboard()", grid.}
+    proc `cbGetter`*(field: `name`): cint 
+      {.importcpp: "#.Checkerboard()", grid.}
+    proc `cbGetter`*(field: `nameD`): cint 
+      {.importcpp: "#.Checkerboard()", grid.}
+    proc `cbGetter`*(field: `nameF`): cint 
+      {.importcpp: "#.Checkerboard()", grid.}
+
+    # checkerboard setter (Checkerboard() returns int& in Grid)
+    proc `cbSetter`*(field: var `name`; cb: cint) 
+      {.importcpp: "#.Checkerboard() = #", grid.}
+    proc `cbSetter`*(field: var `nameD`; cb: cint) 
+      {.importcpp: "#.Checkerboard() = #", grid.}
+    proc `cbSetter`*(field: var `nameF`; cb: cint) 
+      {.importcpp: "#.Checkerboard() = #", grid.}
+
+    # pick/set checkerboard (red-black decomposition)
+    proc pickCheckerboard(cb: cint; half: var `name`; full: `name`)
+      {.importcpp: "Grid::pickCheckerboard(@)", grid.}
+    proc pickCheckerboard(cb: cint; half: var `nameD`; full: `nameD`)
+      {.importcpp: "Grid::pickCheckerboard(@)", grid.}
+    proc pickCheckerboard(cb: cint; half: var `nameF`; full: `nameF`)
+      {.importcpp: "Grid::pickCheckerboard(@)", grid.}
+
+    proc setCheckerboard(full: var `name`; half: `name`)
+      {.importcpp: "Grid::setCheckerboard(@)", grid.}
+    proc setCheckerboard(full: var `nameD`; half: `nameD`)
+      {.importcpp: "Grid::setCheckerboard(@)", grid.}
+    proc setCheckerboard(full: var `nameF`; half: `nameF`)
+      {.importcpp: "Grid::setCheckerboard(@)", grid.}
+
+    # set even components of full to half
+    template `evenSetter`*(full: var `name`; half: `name`) = 
+      assert `cbGetter`(half) == Even, "source field is not even-checkerboarded"
+      setCheckerboard(full, half)
+    template `evenSetter`*(full: var `nameD`; half: `nameD`) = 
+      assert `cbGetter`(half) == Even, "source field is not even-checkerboarded"
+      setCheckerboard(full, half)
+    template `evenSetter`*(full: var `nameF`; half: `nameF`) = 
+      assert `cbGetter`(half) == Even, "source field is not even-checkerboarded"
+      setCheckerboard(full, half)
+    
+    # set odd components of full to half
+    template `oddSetter`*(full: var `name`; half: `name`) = 
+      assert `cbGetter`(half) == Odd, "source field is not odd-checkerboarded"
+      setCheckerboard(full, half)
+    template `oddSetter`*(full: var `nameD`; half: `nameD`) = 
+      assert `cbGetter`(half) == Odd, "source field is not odd-checkerboarded"
+      setCheckerboard(full, half)
+    template `oddSetter`*(full: var `nameF`; half: `nameF`) = 
+      assert `cbGetter`(half) == Odd, "source field is not odd-checkerboarded"
+      setCheckerboard(full, half)
+
+    # set half to even components of full
+    template setEven*(half: var `name`; full: `name`) =
+      pickCheckerboard(Even, half, full)
+    template setEven*(half: var `nameD`; full: `nameD`) =
+      pickCheckerboard(Even, half, full)
+    template setEven*(half: var `nameF`; full: `nameF`) =
+      pickCheckerboard(Even, half, full)
+    
+    # set half to odd components of full
+    template setOdd*(half: var `name`; full: `name`) =
+      pickCheckerboard(Odd, half, full)
+    template setOdd*(half: var `nameD`; full: `nameD`) =
+      pickCheckerboard(Odd, half, full)
+    template setOdd*(half: var `nameF`; full: `nameF`) =
+      pickCheckerboard(Odd, half, full)
+
     # halo exchange into padded layout
-    proc exchange*(cell: PaddedCell; src: `name`): `name` 
+    proc expand*(cell: PaddedCell; src: `name`): `name` 
       {.importcpp: "#.Exchange(#)", grid.}
-    proc exchange*(cell: PaddedCell; src: `nameD`): `nameD` 
+    proc expand*(cell: PaddedCell; src: `nameD`): `nameD` 
       {.importcpp: "#.Exchange(#)", grid.}
-    proc exchange*(cell: PaddedCell; src: `nameF`): `nameF` 
+    proc expand*(cell: PaddedCell; src: `nameF`): `nameF` 
       {.importcpp: "#.Exchange(#)", grid.}
     
     # extract from padded layout
@@ -132,27 +214,79 @@ macro newFieldType*(name: untyped): untyped =
     proc extract*(cell: PaddedCell; src: `nameF`): `nameF`
       {.importcpp: "#.Extract(#)", grid.}
     
-    # random initialization
+    # halo exchange
+    proc exchange*(cell: PaddedCell; src: var `name`) = 
+      src = cell.expand(cell.extract(src))
+    proc exchange*(cell: PaddedCell; src: var `nameD`) = 
+      src = cell.expand(cell.extract(src))
+    proc exchange*(cell: PaddedCell; src: var `nameF`) = 
+      src = cell.expand(cell.extract(src))
+    
+    # random uniform initialization
     proc random*(rng: var ParallelRNG; field: var `name`)
       {.importcpp: "Grid::random(@)", grid.}
     proc random*(rng: var ParallelRNG; field: var `nameD`)
       {.importcpp: "Grid::random(@)", grid.}
     proc random*(rng: var ParallelRNG; field: var `nameF`)
       {.importcpp: "Grid::random(@)", grid.}
+
+    # random normal initialization
+    proc gaussian*(rng: var ParallelRNG; field: var `name`)
+      {.importcpp: "Grid::gaussian(@)", grid.}
+    proc gaussian*(rng: var ParallelRNG; field: var `nameD`)
+      {.importcpp: "Grid::gaussian(@)", grid.}
+    proc gaussian*(rng: var ParallelRNG; field: var `nameF`)
+      {.importcpp: "Grid::gaussian(@)", grid.}
     
-    # cartesian shift
-    proc cartesianShift*(src: `name`; dir, disp: int): `name`
-      {.importcpp: "Grid::Cshift(@, @, @)", grid.}
-    proc cartesianShift*(src: `nameD`; dir, disp: int): `nameD`
-      {.importcpp: "Grid::Cshift(@, @, @)", grid.}
-    proc cartesianShift*(src: `nameF`; dir, disp: int): `nameF`
-      {.importcpp: "Grid::Cshift(@, @, @)", grid.}
+    # hot configuration
+    proc hot*(rng: var ParallelRNG; field: var `name`)
+      {.importcpp: "Grid::SU<Grid::Nc>::HotConfiguration(@)", grid.}
+    proc hot*(rng: var ParallelRNG; field: var `nameD`)
+      {.importcpp: "Grid::SU<Grid::Nc>::HotConfiguration(@)", grid.}
+    proc hot*(rng: var ParallelRNG; field: var `nameF`)
+      {.importcpp: "Grid::SU<Grid::Nc>::HotConfiguration(@)", grid.}
+    
+    # tepid configuration (same as gaussian)
+    proc tepid*(rng: var ParallelRNG; field: var `name`)
+      {.importcpp: "Grid::SU<Grid::Nc>::TepidConfiguration(@)", grid.}
+    proc tepid*(rng: var ParallelRNG; field: var `nameD`)
+      {.importcpp: "Grid::SU<Grid::Nc>::TepidConfiguration(@)", grid.}
+    proc tepid*(rng: var ParallelRNG; field: var `nameF`)
+      {.importcpp: "Grid::SU<Grid::Nc>::TepidConfiguration(@)", grid.}
+
+    # unit (cold) configuration
+    proc unit*(dst: var `name`) {.importcpp: "Grid::SU<Grid::Nc>::ColdConfiguration(@)", grid.}
+    proc unit*(dst: var `nameD`) {.importcpp: "Grid::SU<Grid::Nc>::ColdConfiguration(@)", grid.}
+    proc unit*(dst: var `nameF`) {.importcpp: "Grid::SU<Grid::Nc>::ColdConfiguration(@)", grid.}
 
     # explicit set to zero
     proc zero*(dst: var `name`) {.importcpp: "# = Grid::Zero()", grid.}
     proc zero*(dst: var `nameD`) {.importcpp: "# = Grid::Zero()", grid.}
     proc zero*(dst: var `nameF`) {.importcpp: "# = Grid::Zero()", grid.}
+
+    # cartesian shift
+    proc cartesianShift*(src: `name`; dir, disp: int): `name`
+      {.importcpp: "Grid::Cshift(@)", grid.}
+    proc cartesianShift*(src: `nameD`; dir, disp: int): `nameD`
+      {.importcpp: "Grid::Cshift(@)", grid.}
+    proc cartesianShift*(src: `nameF`; dir, disp: int): `nameF`
+      {.importcpp: "Grid::Cshift(@)", grid.}
     
+    # adjoint
+    proc adjoint*(src: `name`): `name` {.importcpp: "Grid::adj(@)", grid.}
+    proc adjoint*(src: `nameD`): `nameD` {.importcpp: "Grid::adj(@)", grid.}
+    proc adjoint*(src: `nameF`): `nameF` {.importcpp: "Grid::adj(@)", grid.}
+
+    # conjugate
+    proc conjugate*(src: `name`): `name` {.importcpp: "Grid::conjugate(@)", grid.}
+    proc conjugate*(src: `nameD`): `nameD` {.importcpp: "Grid::conjugate(@)", grid.}
+    proc conjugate*(src: `nameF`): `nameF` {.importcpp: "Grid::conjugate(@)", grid.}
+
+    # transpose 
+    proc transpose*(src: `name`): `name` {.importcpp: "Grid::transpose(@)", grid.}
+    proc transpose*(src: `nameD`): `nameD` {.importcpp: "Grid::transpose(@)", grid.}
+    proc transpose*(src: `nameF`): `nameF` {.importcpp: "Grid::transpose(@)", grid.}
+
     # arithmetic: addition
     proc `opAdd`*(a, b: `name`): `name` {.importcpp: "(# + #)", grid.}
     proc `opAdd`*(a, b: `nameD`): `nameD` {.importcpp: "(# + #)", grid.}
@@ -222,32 +356,6 @@ newFieldType(LatticeSpinColorMatrix)
 newFieldType(LatticeGaugeField)
 newFieldType(LatticePropagator)
 
-#[ sum: global reduce + TensorRemove for scalar field types ]#
-
-# Integer
-proc sum*(src: LatticeInteger): cint
-  {.importcpp: "Grid::TensorRemove(Grid::sum(@))", grid.}
-proc sum*(src: LatticeIntegerD): cint
-  {.importcpp: "Grid::TensorRemove(Grid::sum(@))", grid.}
-proc sum*(src: LatticeIntegerF): cint
-  {.importcpp: "Grid::TensorRemove(Grid::sum(@))", grid.}
-
-# Real
-proc sum*(src: LatticeReal): float64
-  {.importcpp: "Grid::TensorRemove(Grid::sum(@))", grid.}
-proc sum*(src: LatticeRealD): float64
-  {.importcpp: "Grid::TensorRemove(Grid::sum(@))", grid.}
-proc sum*(src: LatticeRealF): float32
-  {.importcpp: "Grid::TensorRemove(Grid::sum(@))", grid.}
-
-# Complex
-proc sum*(src: LatticeComplex): ComplexD
-  {.importcpp: "Grid::TensorRemove(Grid::sum(@))", grid.}
-proc sum*(src: LatticeComplexD): ComplexD
-  {.importcpp: "Grid::TensorRemove(Grid::sum(@))", grid.}
-proc sum*(src: LatticeComplexF): ComplexF
-  {.importcpp: "Grid::TensorRemove(Grid::sum(@))", grid.}
-
 type
   IntegerField* = LatticeInteger | LatticeIntegerD | LatticeIntegerF
     ## Type union of all integer-valued lattice fields
@@ -271,7 +379,7 @@ type
     ## Type union of fermion (spin-color-vector) fields
 
 type Field* = IntegerField | RealField | ComplexField | PropagatorField | GaugeField | GaugeLinkField | BosonField | FermionField
-  ## Type union of all lattice fields.
+  ## Type union of all lattice fields
 
 #[ constructors ]#
 
@@ -403,30 +511,67 @@ proc trace*(src: LatticeColorMatrixD): LatticeComplexD
 proc trace*(src: LatticeColorMatrixF): LatticeComplexF
   {.importcpp: "Grid::trace(@)", grid.} 
 
-proc trace*(src: GaugeField): auto =
-  when src of LatticeGaugeField: 
-    var vector: Vector[LatticeComplex]
-  elif src of LatticeGaugeFieldD: 
-    var vector: Vector[LatticeComplexD]
-  elif src of LatticeGaugeFieldF: 
-    var vector: Vector[LatticeComplexF]
-  else: staticError("Invalid type for trace: " & $src)
-  vector.reserve(nd)
-  for mu in 0..<nd: vector.add trace(src[mu])
-  return vector.toSeq()
+template trace*(src: GaugeField): untyped =
+  ## Returns a tuple of per-Lorentz-component traces.
+  when nd == 1:
+    (trace(src[0]),)
+  elif nd == 2:
+    (trace(src[0]), trace(src[1]))
+  elif nd == 3:
+    (trace(src[0]), trace(src[1]), trace(src[2]))
+  elif nd == 4:
+    (trace(src[0]), trace(src[1]), trace(src[2]), trace(src[3]))
+  elif nd == 5:
+    (trace(src[0]), trace(src[1]), trace(src[2]), trace(src[3]), trace(src[4]))
+  else:
+    {.error: "trace(GaugeField) not implemented for nd > 5".}
+
+proc tracelessAntihermitianProjection*(src: LatticeColorMatrix): LatticeColorMatrix
+  {.importcpp: "Grid::Ta(@)", grid.}
+proc tracelessAntihermitianProjection*(src: LatticeColorMatrixD): LatticeColorMatrixD
+  {.importcpp: "Grid::Ta(@)", grid.}
+proc tracelessAntihermitianProjection*(src: LatticeColorMatrixF): LatticeColorMatrixF
+  {.importcpp: "Grid::Ta(@)", grid.}
+
+proc tracelessAntihermitianProjection*(src: LatticeGaugeField): LatticeGaugeField
+  {.importcpp: "Grid::Ta(@)", grid.}
+proc tracelessAntihermitianProjection*(src: LatticeGaugeFieldD): LatticeGaugeFieldD
+  {.importcpp: "Grid::Ta(@)", grid.}
+proc tracelessAntihermitianProjection*(src: LatticeGaugeFieldF): LatticeGaugeFieldF
+  {.importcpp: "Grid::Ta(@)", grid.}
+
+proc reorthogonalize*(field: var GaugeLinkField) 
+  {.importcpp: "Grid::ProjectOnGroup(@)", grid.}
+
+proc exponentiate*(field: GaugeLinkField; alpha: float64 = 1.0; nexp: int = 12): auto
+  {.importcpp: "Grid::Exponentiate(#, #, #)", grid.}
+
+proc determinant*(src: LatticeColorMatrix): LatticeComplex
+  {.importcpp: "Grid::Determinant(@)", grid.}
+proc determinant*(src: LatticeColorMatrixD): LatticeComplexD
+  {.importcpp: "Grid::Determinant(@)", grid.}
+proc determinant*(src: LatticeColorMatrixF): LatticeComplexF
+  {.importcpp: "Grid::Determinant(@)", grid.}
+
+proc inverse*(src: LatticeColorMatrix): LatticeColorMatrix
+  {.importcpp: "Grid::Inverse(@)", grid.}
+proc inverse*(src: LatticeColorMatrixD): LatticeColorMatrixD
+  {.importcpp: "Grid::Inverse(@)", grid.}
+proc inverse*(src: LatticeColorMatrixF): LatticeColorMatrixF
+  {.importcpp: "Grid::Inverse(@)", grid.}
 
 proc `*`*(a, b: LatticeGaugeField): LatticeGaugeField
   {.importcpp: "(#*#)", grid.}
-proc `*`*(a, b: LatticeGaugeFieldD): LatticeGaugeField
+proc `*`*(a, b: LatticeGaugeFieldD): LatticeGaugeFieldD
   {.importcpp: "(#*#)", grid.}
-proc `*`*(a, b: LatticeGaugeFieldF): LatticeGaugeField
+proc `*`*(a, b: LatticeGaugeFieldF): LatticeGaugeFieldF
   {.importcpp: "(#*#)", grid.}
 
 proc `*`*(a, b: LatticeColorMatrix): LatticeColorMatrix
   {.importcpp: "(#*#)", grid.}
-proc `*`*(a, b: LatticeColorMatrixD): LatticeColorMatrix
+proc `*`*(a, b: LatticeColorMatrixD): LatticeColorMatrixD
   {.importcpp: "(#*#)", grid.}
-proc `*`*(a, b: LatticeColorMatrixF): LatticeColorMatrix
+proc `*`*(a, b: LatticeColorMatrixF): LatticeColorMatrixF
   {.importcpp: "(#*#)", grid.}
 
 proc `*`*(a: LatticeComplex; b: LatticeGaugeField): LatticeGaugeField
@@ -459,40 +604,54 @@ proc `[]=`*(target: var FermionField; c,s: int; source: PropagatorField) =
 
 #[ misc real/complex operations ]#
 
-proc adjoint*(src: LatticeComplex): LatticeComplex
-  {.importcpp: "Grid::adj(@)", grid.}
-proc adjoint*(src: LatticeComplexD): LatticeComplexD
-  {.importcpp: "Grid::adj(@)", grid.}
-proc adjoint*(src: LatticeComplexF): LatticeComplexF
-  {.importcpp: "Grid::adj(@)", grid.}
+proc sum*(src: LatticeInteger): int
+  {.importcpp: "Grid::TensorRemove(Grid::sum(@))", grid.}
+proc sum*(src: LatticeIntegerD): int
+  {.importcpp: "Grid::TensorRemove(Grid::sum(@))", grid.}
+proc sum*(src: LatticeIntegerF): int
+  {.importcpp: "Grid::TensorRemove(Grid::sum(@))", grid.}
 
-proc real(src: LatticeComplex): LatticeComplex
+proc sum*(src: LatticeReal): float64
+  {.importcpp: "Grid::TensorRemove(Grid::sum(@))", grid.}
+proc sum*(src: LatticeRealD): float64
+  {.importcpp: "Grid::TensorRemove(Grid::sum(@))", grid.}
+proc sum*(src: LatticeRealF): float32
+  {.importcpp: "Grid::TensorRemove(Grid::sum(@))", grid.}
+
+proc sum*(src: LatticeComplex): ComplexD
+  {.importcpp: "Grid::TensorRemove(Grid::sum(@))", grid.}
+proc sum*(src: LatticeComplexD): ComplexD
+  {.importcpp: "Grid::TensorRemove(Grid::sum(@))", grid.}
+proc sum*(src: LatticeComplexF): ComplexF
+  {.importcpp: "Grid::TensorRemove(Grid::sum(@))", grid.}
+
+proc re*(src: LatticeComplex): LatticeComplex
   {.importcpp: "Grid::real(@)", grid.}
-proc real(src: LatticeComplexD): LatticeComplexD
+proc re*(src: LatticeComplexD): LatticeComplexD
   {.importcpp: "Grid::real(@)", grid.}
-proc real(src: LatticeComplexF): LatticeComplexF
+proc re*(src: LatticeComplexF): LatticeComplexF
   {.importcpp: "Grid::real(@)", grid.}
 
-proc imag(src: LatticeComplex): LatticeComplex
+proc im*(src: LatticeComplex): LatticeComplex
   {.importcpp: "Grid::imag(@)", grid.}
-proc imag(src: LatticeComplexD): LatticeComplexD
+proc im*(src: LatticeComplexD): LatticeComplexD
   {.importcpp: "Grid::imag(@)", grid.}
-proc imag(src: LatticeComplexF): LatticeComplexF
+proc im*(src: LatticeComplexF): LatticeComplexF
   {.importcpp: "Grid::imag(@)", grid.}
 
-proc re*(src: LatticeComplex): LatticeReal
-  {.importcpp: "Grid::toReal(Grid::real(@))", grid.}
-proc re*(src: LatticeComplexD): LatticeRealD
-  {.importcpp: "Grid::toReal(Grid::real(@))", grid.}
-proc re*(src: LatticeComplexF): LatticeRealF
-  {.importcpp: "Grid::toReal(Grid::real(@))", grid.}
+proc toReal*(src: LatticeComplex): LatticeReal
+  {.importcpp: "Grid::toReal(@)", grid.}
+proc toReal*(src: LatticeComplexD): LatticeRealD
+  {.importcpp: "Grid::toReal(@)", grid.}
+proc toReal*(src: LatticeComplexF): LatticeRealF
+  {.importcpp: "Grid::toReal(@)", grid.}
 
-proc im*(src: LatticeComplex): LatticeReal
-  {.importcpp: "Grid::toReal(Grid::imag(@))", grid.}
-proc im*(src: LatticeComplexD): LatticeRealD
-  {.importcpp: "Grid::toReal(Grid::imag(@))", grid.}
-proc im*(src: LatticeComplexF): LatticeRealF
-  {.importcpp: "Grid::toReal(Grid::imag(@))", grid.}
+proc toComplex*(src: LatticeReal): LatticeComplex
+  {.importcpp: "Grid::toComplex(@)", grid.}
+proc toComplex*(src: LatticeRealD): LatticeComplexD
+  {.importcpp: "Grid::toComplex(@)", grid.}
+proc toComplex*(src: LatticeRealF): LatticeComplexF
+  {.importcpp: "Grid::toComplex(@)", grid.}
 
 proc `*`*(a, b: LatticeReal): LatticeReal {.importcpp: "(#*#)", grid.}
 proc `*`*(a, b: LatticeRealD): LatticeRealD {.importcpp: "(#*#)", grid.}
@@ -503,39 +662,39 @@ proc `*`*(a, b: LatticeComplexD): LatticeComplexD {.importcpp: "(#*#)", grid.}
 proc `*`*(a, b: LatticeComplexF): LatticeComplexF {.importcpp: "(#*#)", grid.}
 
 proc `*`*(a: LatticeReal; b: LatticeComplex): LatticeComplex
-  {.importcpp: "(#*#)", grid.}
+  {.importcpp: "(Grid::toComplex(#)*#)", grid.}
 proc `*`*(a: LatticeComplex; b: LatticeReal): LatticeComplex
-  {.importcpp: "(#*#)", grid.}
+  {.importcpp: "(#*Grid::toComplex(#))", grid.}
 proc `*`*(a: LatticeRealD; b: LatticeComplexD): LatticeComplexD
-  {.importcpp: "(#*#)", grid.}
+  {.importcpp: "(Grid::toComplex(#)*#)", grid.}
 proc `*`*(a: LatticeComplexD; b: LatticeRealD): LatticeComplexD
-  {.importcpp: "(#*#)", grid.}
+  {.importcpp: "(#*Grid::toComplex(#))", grid.}
 proc `*`*(a: LatticeRealF; b: LatticeComplexF): LatticeComplexF
-  {.importcpp: "(#*#)", grid.}
+  {.importcpp: "(Grid::toComplex(#)*#)", grid.}
 proc `*`*(a: LatticeComplexF; b: LatticeRealF): LatticeComplexF
-  {.importcpp: "(#*#)", grid.}
+  {.importcpp: "(#*Grid::toComplex(#))", grid.}
 
 #[ misc operations ]#
 
-proc squaredNorm*(src: LatticeComplex | LatticeColorVector | LatticeColorMatrix): LatticeReal
+proc l2Norm2*(src: LatticeComplex | LatticeColorVector): float64
   {.importcpp: "Grid::norm2(@)", grid.}
-proc squaredNorm*(src: LatticeComplexD | LatticeColorVector | LatticeColorMatrixD): LatticeRealD
+proc l2Norm2*(src: LatticeComplexD | LatticeColorVectorD): float64
   {.importcpp: "Grid::norm2(@)", grid.}
-proc squaredNorm*(src: LatticeComplexF | LatticeColorVector | LatticeColorMatrixF): LatticeRealF
-  {.importcpp: "Grid::norm2(@)", grid.}
+proc l2Norm2*(src: LatticeComplexF | LatticeColorVectorF): float32
+  {.importcpp: "(float)Grid::norm2(@)", grid.}
 
-proc adjoint*(src: LatticeComplex | LatticeColorVector | LatticeColorMatrix): LatticeComplex
-  {.importcpp: "Grid::adj(@)", grid.}
-proc adjoint*(src: LatticeComplexD | LatticeColorVector | LatticeColorMatrixD): LatticeComplexD
-  {.importcpp: "Grid::adj(@)", grid.}
-proc adjoint*(src: LatticeComplexF | LatticeColorVector | LatticeColorMatrixF): LatticeComplexF
-  {.importcpp: "Grid::adj(@)", grid.}
+proc traceNorm2*(src: LatticeColorMatrix): float64
+  {.importcpp: "Grid::norm2(@)", grid.}
+proc traceNorm2*(src: LatticeColorMatrixD): float64
+  {.importcpp: "Grid::norm2(@)", grid.}
+proc traceNorm2*(src: LatticeColorMatrixF): float32
+  {.importcpp: "(float)Grid::norm2(@)", grid.}
 
 proc `><`*(a, b: LatticeColorVector): LatticeColorMatrix
   {.importcpp: "Grid::outerProduct(@)", grid.}
-proc `><`*(a, b: LatticeColorVectorD): LatticeColorMatrix
+proc `><`*(a, b: LatticeColorVectorD): LatticeColorMatrixD
   {.importcpp: "Grid::outerProduct(@)", grid.}
-proc `><`*(a, b: LatticeColorVectorF): LatticeColorMatrix
+proc `><`*(a, b: LatticeColorVectorF): LatticeColorMatrixF
   {.importcpp: "Grid::outerProduct(@)", grid.}
 
 proc `*`*(a, b: LatticeColorVector): LatticeComplex
@@ -544,13 +703,20 @@ proc `*`*(a, b: LatticeColorVectorD): LatticeComplexD
   {.importcpp: "Grid::localInnerProduct(@)", grid.}
 proc `*`*(a, b: LatticeColorVectorF): LatticeComplexF
   {.importcpp: "Grid::localInnerProduct(@)", grid.}
+  
+proc `*.`*(a, b: LatticeColorVector): LatticeComplex
+  {.importcpp: "Grid::localInnerProduct(@)", grid.}
+proc `*.`*(a, b: LatticeColorVectorD): LatticeComplexD
+  {.importcpp: "Grid::localInnerProduct(@)", grid.}
+proc `*.`*(a, b: LatticeColorVectorF): LatticeComplexF
+  {.importcpp: "Grid::localInnerProduct(@)", grid.}
 
 proc `*`*(a: LatticeReal; b: LatticeColorVector): LatticeColorVector
-  {.importcpp: "(#*#)", grid.}
+  {.importcpp: "(Grid::toComplex(#)*#)", grid.}
 proc `*`*(a: LatticeRealD; b: LatticeColorVectorD): LatticeColorVectorD
-  {.importcpp: "(#*#)", grid.}
+  {.importcpp: "(Grid::toComplex(#)*#)", grid.}
 proc `*`*(a: LatticeRealF; b: LatticeColorVectorF): LatticeColorVectorF
-  {.importcpp: "(#*#)", grid.} 
+  {.importcpp: "(Grid::toComplex(#)*#)", grid.} 
 
 proc `*`*(a: LatticeComplex; b: LatticeColorVector): LatticeColorVector
   {.importcpp: "(#*#)", grid.}
@@ -562,32 +728,514 @@ proc `*`*(a: LatticeComplexF; b: LatticeColorVectorF): LatticeColorVectorF
 #[ tests ]#
 
 when isMainModule:
+  const tol = 1e-6
+
+  proc `~=`(a, b: float64): bool =
+    let scale = max(abs(a), max(abs(b), 1.0))
+    abs(a - b) < tol * scale
+
+  proc pass(name: string) = print "  [PASS]", name
+  proc fail(name: string; msg: string = "") =
+    print "  [FAIL]", name, msg
+    quit(1)
+
+  template test(name: string; body: untyped) =
+    block:
+      body
+      pass(name)
+
   grid:
+    print "===== field.nim unit tests ====="
+
+    # ── setup ────────────────────────────────────────────────────────────
     var grid = newCartesian()
     var rbgrid = grid.newRedBlackCartesian()
+    var rng = grid.newParallelRNG()
+    rng.seed(@[1, 2, 3, 4])
 
-    var real = grid.newRealField()
-    var complex = grid.newComplexField()
-    var gf = grid.newGaugeField()
-    var bf = grid.newBosonField()
-    var ff = grid.newFermionField() 
+    # ── 1. field construction ────────────────────────────────────────────
+    test "construct real field":
+      var r = grid.newRealField()
+      zero(r)
+      assert sum(r) ~= 0.0
 
-    var cv2 = grid.newBosonField()
-    var cv3 = grid.newBosonField()
+    test "construct complex field":
+      var c = grid.newComplexField()
+      zero(c)
+      let s = sum(c)
+      assert s.re ~= 0.0
+      assert s.im ~= 0.0
 
-    for mu in 0..<nd:
-      let link = gf[mu]
-      gf[mu] = link
-    
-    let cv1 = cv2 * cv3
-    let cm1 = cv2 >< cv3
+    test "construct gauge field":
+      var gf = grid.newGaugeField()
+      zero(gf)
 
-    # test reductions
-    let realSum = sum(real)           # sum: reduce + TensorRemove → float64
-    let complexSum = sum(complex)     # sum: reduce + TensorRemove → ComplexD
-    let linkReduce = reduce(gf[0])    # reduce only (TensorRemove N/A for matrices)
-    let bosonReduce = reduce(bf)      # reduce only (TensorRemove N/A for vectors)
+    test "construct boson field":
+      var bf = grid.newBosonField()
+      zero(bf)
 
-    # test re/im: ComplexField → RealField
-    let realPart = complex.re
-    let imagPart = complex.im
+    test "construct fermion field":
+      var ff = grid.newFermionField()
+      zero(ff)
+
+    # ── 2. zero and sum ──────────────────────────────────────────────────
+    test "zero real field sums to 0":
+      var r = grid.newRealField()
+      zero(r)
+      assert sum(r) ~= 0.0
+
+    test "zero complex field sums to 0":
+      var c = grid.newComplexField()
+      zero(c)
+      let s = sum(c)
+      assert s.re ~= 0.0 and s.im ~= 0.0
+
+    # ── 3. random fill ───────────────────────────────────────────────────
+    test "random real field has nonzero sum":
+      var r = grid.newRealField()
+      rng.random(r)
+      let s = sum(r)
+      # random uniform on [0,1]: very unlikely to sum to exactly 0
+      assert not (s ~= 0.0)
+
+    test "gaussian complex field fills":
+      var c = grid.newComplexField()
+      rng.gaussian(c)
+      let s = sum(c)
+      # gaussian fill: just verify it runs and produces a value
+      discard s
+
+    # ── 4. arithmetic: addition / subtraction ────────────────────────────
+    test "real field addition":
+      var a = grid.newRealField()
+      var b = grid.newRealField()
+      rng.random(a)
+      rng.random(b)
+      let sa = sum(a)
+      let sb = sum(b)
+      let c = a + b
+      assert sum(c) ~= (sa + sb)
+
+    test "real field subtraction":
+      var a = grid.newRealField()
+      var b = grid.newRealField()
+      rng.random(a)
+      rng.random(b)
+      let sa = sum(a)
+      let sb = sum(b)
+      let c = a - b
+      assert sum(c) ~= (sa - sb)
+
+    test "unary negation":
+      var a = grid.newRealField()
+      rng.random(a)
+      let sa = sum(a)
+      let b = -a
+      assert sum(b) ~= (-sa)
+
+    # ── 5. scalar-field mixed arithmetic ─────────────────────────────────
+    test "scalar * real field":
+      var a = grid.newRealField()
+      rng.random(a)
+      let sa = sum(a)
+      let b = 2.0 * a
+      assert sum(b) ~= (2.0 * sa)
+
+    test "real field * scalar":
+      var a = grid.newRealField()
+      rng.random(a)
+      let sa = sum(a)
+      let b = a * 3.0
+      assert sum(b) ~= (3.0 * sa)
+
+    # ── 6. compound assignment ───────────────────────────────────────────
+    test "+= on real field":
+      var a = grid.newRealField()
+      var b = grid.newRealField()
+      rng.random(a)
+      rng.random(b)
+      let expected = sum(a) + sum(b)
+      a += b
+      assert sum(a) ~= expected
+
+    test "-= on real field":
+      var a = grid.newRealField()
+      var b = grid.newRealField()
+      rng.random(a)
+      rng.random(b)
+      let sa = sum(a)
+      let sb = sum(b)
+      a -= b
+      assert sum(a) ~= (sa - sb)
+
+    # ── 7. complex re / im decomposition ─────────────────────────────────
+    test "re and im of complex field":
+      var c = grid.newComplexField()
+      rng.gaussian(c)
+      let rePart = c.re
+      let imPart = c.im
+      let sc = sum(c)
+      let sre = sum(rePart)
+      let sim = sum(imPart)
+      # re returns complex with imag zeroed, im returns complex with real zeroed
+      assert sre.re ~= sc.re
+      assert abs(sre.im) < tol
+      assert sim.re ~= sc.im
+      assert abs(sim.im) < tol
+
+    # ── 8. toReal / toComplex roundtrip ──────────────────────────────────
+    test "toComplex then re recovers original":
+      var r = grid.newRealField()
+      rng.random(r)
+      let c = r.toComplex()
+      let cRe = c.re              # LatticeComplexD (imag zeroed)
+      let r2 = cRe.toReal()       # back to LatticeRealD
+      let diff = r - r2
+      assert sum(diff) ~= 0.0
+
+    # ── 9. gauge field peek/poke Lorentz ─────────────────────────────────
+    test "gauge field peek/poke roundtrip":
+      var gf = grid.newGaugeField()
+      rng.hot(gf)
+      for mu in 0..<nd:
+        let link = gf[mu]
+        gf[mu] = link
+      # should not crash; gauge links survive roundtrip
+
+    # ── 10. hot / unit gauge configuration ───────────────────────────────
+    test "unit gauge config trace":
+      var gf = grid.newGaugeField()
+      unit(gf)
+      # each link is identity matrix → trace = Nc per site per mu
+      let link0 = gf[0]
+      let trLink = trace(link0)
+      let trSum = sum(trLink)
+      # Nc * volume (volume = gSites on full grid)
+      let vol = float64(grid.gSites)
+      let nc = 3.0  # SU(3)
+      assert trSum.re ~= (nc * vol)
+      assert trSum.im ~= 0.0
+
+    test "hot gauge config fills without error":
+      var gf = grid.newGaugeField()
+      rng.hot(gf)
+      # just verify it runs
+      let link0 = gf[0]
+      discard trace(link0)
+
+    test "tepid gauge config fills without error":
+      var gf = grid.newGaugeField()
+      rng.tepid(gf)
+      let link0 = gf[0]
+      discard trace(link0)
+
+    # ── 11. gauge link algebra ───────────────────────────────────────────
+    test "color matrix multiplication":
+      var gf = grid.newGaugeField()
+      unit(gf)
+      let u0 = gf[0]
+      let prod = u0 * u0  # I * I = I
+      let trProd = trace(prod)
+      let s = sum(trProd)
+      let vol = float64(grid.gSites)
+      assert s.re ~= (3.0 * vol)
+
+    test "adjoint of unit is unit":
+      var gf = grid.newGaugeField()
+      unit(gf)
+      let u0 = gf[0]
+      let udag = adjoint(u0)
+      let diff = u0 - udag
+      # trace(I - I†) = 0 for unitary
+      assert sum(trace(diff)).re ~= 0.0
+
+    test "U * U† = identity (unitarity)":
+      var gf = grid.newGaugeField()
+      rng.hot(gf)
+      let u0 = gf[0]
+      let udag = adjoint(u0)
+      let prod = u0 * udag
+      let trProd = sum(trace(prod))
+      let vol = float64(grid.gSites)
+      assert trProd.re ~= (3.0 * vol)
+      assert abs(trProd.im) < tol
+
+    # ── 12. determinant and inverse ──────────────────────────────────────
+    test "determinant of unit is 1":
+      var gf = grid.newGaugeField()
+      unit(gf)
+      let u0 = gf[0]
+      let det = determinant(u0)
+      let s = sum(det)
+      let vol = float64(grid.gSites)
+      assert s.re ~= vol
+      assert abs(s.im) < tol
+
+    test "inverse of unit is unit":
+      var gf = grid.newGaugeField()
+      unit(gf)
+      let u0 = gf[0]
+      let uinv = inverse(u0)
+      let diff = u0 - uinv
+      assert sum(trace(diff)).re ~= 0.0
+
+    test "U * U^-1 = identity":
+      var gf = grid.newGaugeField()
+      rng.hot(gf)
+      let u0 = gf[0]
+      let uinv = inverse(u0)
+      let prod = u0 * uinv
+      let trProd = sum(trace(prod))
+      let vol = float64(grid.gSites)
+      assert trProd.re ~= (3.0 * vol)
+      assert abs(trProd.im) < tol
+
+    # ── 13. trace and traceless antihermitian projection ─────────────────
+    test "Ta of unit link":
+      var gf = grid.newGaugeField()
+      unit(gf)
+      let u0 = gf[0]
+      let ta = tracelessAntihermitianProjection(u0)
+      # Ta(I) should be traceless
+      let trTa = sum(trace(ta))
+      assert abs(trTa.re) < tol
+      assert abs(trTa.im) < tol
+
+    # ── 14. reorthogonalize (ProjectOnGroup) ─────────────────────────────
+    test "reorthogonalize preserves unitarity":
+      var gf = grid.newGaugeField()
+      rng.hot(gf)
+      var u0 = gf[0]
+      reorthogonalize(u0)
+      let prod = u0 * adjoint(u0)
+      let trProd = sum(trace(prod))
+      let vol = float64(grid.gSites)
+      assert trProd.re ~= (3.0 * vol)
+
+    # ── 15. cartesian shift ──────────────────────────────────────────────
+    test "shift in direction 0 and back":
+      var r = grid.newRealField()
+      rng.random(r)
+      let original = sum(r)
+      let shifted = cartesianShift(r, 0, 1)
+      # global sum is shift-invariant
+      assert sum(shifted) ~= original
+
+    # ── 16. norm2 (scalar return) ────────────────────────────────────────
+    test "norm2 of zero field is zero":
+      var c = grid.newComplexField()
+      zero(c)
+      assert l2Norm2(c) ~= 0.0
+
+    test "norm2 of nonzero field is positive":
+      var c = grid.newComplexField()
+      rng.gaussian(c)
+      assert l2Norm2(c) > 0.0
+
+    test "traceNorm2 of unit link":
+      var gf = grid.newGaugeField()
+      unit(gf)
+      let u0 = gf[0]
+      let n2 = traceNorm2(u0)
+      # ||I||² = sum trace(I† I) = Nc * vol
+      let vol = float64(grid.gSites)
+      assert n2 ~= (3.0 * vol)
+
+    # ── 17. color vector operations ──────────────────────────────────────
+    test "outer product of boson fields":
+      var v1 = grid.newBosonField()
+      var v2 = grid.newBosonField()
+      rng.random(v1)
+      rng.random(v2)
+      let mat = v1 >< v2
+      # just verify it compiles and produces a matrix we can trace
+      discard sum(trace(mat))
+
+    test "boson field multiply (local inner product)":
+      var v1 = grid.newBosonField()
+      var v2 = grid.newBosonField()
+      rng.random(v1)
+      rng.random(v2)
+      let ip = v1 * v2  # local inner product → LatticeComplex
+      discard sum(ip)
+
+    test "local inner product operator *.":
+      var v1 = grid.newBosonField()
+      var v2 = grid.newBosonField()
+      rng.random(v1)
+      rng.random(v2)
+      let lip = v1 *. v2
+      discard sum(lip)
+
+    # ── 18. scalar * color vector ───────────────────────────────────────
+    test "real field times boson vector":
+      var r = grid.newRealField()
+      var v = grid.newBosonField()
+      rng.random(r)
+      rng.random(v)
+      let rv = r * v  # real * color vector
+      discard rv
+
+    # ── 19. checkerboard operations ──────────────────────────────────────
+    test "pick even checkerboard":
+      var full = grid.newRealField()
+      rng.random(full)
+      var half = rbgrid.newRealField()
+      half.setEven(full)
+      assert half.checkerboard == Even
+
+    test "pick odd checkerboard":
+      var full = grid.newRealField()
+      rng.random(full)
+      var half = rbgrid.newRealField()
+      half.setOdd(full)
+      assert half.checkerboard == Odd
+
+    test "even + odd = full (sum invariant)":
+      var full = grid.newRealField()
+      rng.random(full)
+      let fullSum = sum(full)
+
+      var halfEven = rbgrid.newRealField()
+      var halfOdd = rbgrid.newRealField()
+      halfEven.setEven(full)
+      halfOdd.setOdd(full)
+
+      let evenSum = sum(halfEven)
+      let oddSum = sum(halfOdd)
+      assert (evenSum + oddSum) ~= fullSum
+
+    test "set even/odd back into full field":
+      var full = grid.newRealField()
+      rng.random(full)
+      let fullSum = sum(full)
+
+      var halfEven = rbgrid.newRealField()
+      var halfOdd = rbgrid.newRealField()
+      halfEven.setEven(full)
+      halfOdd.setOdd(full)
+
+      var reconstructed = grid.newRealField()
+      zero(reconstructed)
+      reconstructed.even = halfEven
+      reconstructed.odd = halfOdd
+      assert sum(reconstructed) ~= fullSum
+
+    # ── 20. gauge field Lorentz index stress test ────────────────────────
+    test "poke all Lorentz components":
+      var gf = grid.newGaugeField()
+      unit(gf)
+      for mu in 0..<nd:
+        var link = gf[mu]
+        gf[mu] = link
+      let link0 = gf[0]
+      let s = sum(trace(link0))
+      let vol = float64(grid.gSites)
+      assert s.re ~= (3.0 * vol)
+
+    # ── 21. real-complex interplay ───────────────────────────────────────
+    test "real * complex field":
+      var r = grid.newRealField()
+      var c = grid.newComplexField()
+      rng.random(r)
+      rng.gaussian(c)
+      let rc = r * c
+      discard sum(rc)
+
+    test "complex * real field":
+      var r = grid.newRealField()
+      var c = grid.newComplexField()
+      rng.random(r)
+      rng.gaussian(c)
+      let cr = c * r
+      discard sum(cr)
+
+    # ── 22. complex field multiply ───────────────────────────────────────
+    test "complex * complex field":
+      var a = grid.newComplexField()
+      var b = grid.newComplexField()
+      rng.gaussian(a)
+      rng.gaussian(b)
+      let c = a * b
+      discard sum(c)
+
+    # ── 23. real field multiply ──────────────────────────────────────────
+    test "real * real field":
+      var a = grid.newRealField()
+      var b = grid.newRealField()
+      rng.random(a)
+      rng.random(b)
+      let c = a * b
+      discard sum(c)
+
+    # ── 24. conjugate / transpose ────────────────────────────────────────
+    test "conjugate of real complex field":
+      var c = grid.newComplexField()
+      rng.gaussian(c)
+      let conjField = conjugate(c)
+      # sum(c) + sum(conjField) should have zero imaginary part
+      let sc = sum(c)
+      let sconj = sum(conjField)
+      assert (sc.im + sconj.im) ~= 0.0
+      assert (sc.re - sconj.re) ~= 0.0
+
+    test "transpose of color matrix":
+      var gf = grid.newGaugeField()
+      unit(gf)
+      let u0 = gf[0]
+      let ut = transpose(u0)
+      # transpose of identity is identity
+      let diff = u0 - ut
+      assert sum(trace(diff)).re ~= 0.0
+
+    # ── 25. reduce (global lattice reduction) ────────────────────────────
+    test "reduce on real field":
+      var r = grid.newRealField()
+      zero(r)
+      let red = reduce(r)
+      discard red
+
+    test "reduce on gauge link":
+      var gf = grid.newGaugeField()
+      unit(gf)
+      let link = gf[0]
+      let red = reduce(link)
+      discard red
+
+    # ── 26. fermion / propagator peek/poke spin ─────────────────────────
+    test "fermion field spin peek/poke":
+      var ff = grid.newFermionField()
+      zero(ff)
+      var bf = grid.newBosonField()
+      zero(bf)
+      ff[0] = bf  # poke spin component 0
+      let extracted = ff[0]  # peek spin component 0
+      discard extracted
+
+    # ── 27. peekColor / pokeColor ────────────────────────────────────────
+    test "color matrix peek/poke color roundtrip":
+      var gf = grid.newGaugeField()
+      unit(gf)
+      let u0 = gf[0]
+      let elem00 = u0[0, 0]
+      # for identity: (0,0) element should be 1+0i per site
+      let s = sum(elem00)
+      let vol = float64(grid.gSites)
+      assert s.re ~= vol
+      assert abs(s.im) < tol
+
+    # ── 28. gauge field trace ────────────────────────────────────────────
+    test "gauge field trace returns nd traces":
+      var gf = grid.newGaugeField()
+      unit(gf)
+      let vol = float64(grid.gSites)
+      let t0 = trace(gf[0])
+      let t1 = trace(gf[1])
+      let t2 = trace(gf[2])
+      let t3 = trace(gf[3])
+      assert sum(t0).re ~= (3.0 * vol)
+      assert sum(t1).re ~= (3.0 * vol)
+      assert sum(t2).re ~= (3.0 * vol)
+      assert sum(t3).re ~= (3.0 * vol)
+
+    print "===== all tests passed ====="

@@ -57,11 +57,6 @@ type ILDGReader* {.importcpp: "Grid::IldgReader", grid.} = object
 type ILDGWriter* {.importcpp: "Grid::IldgWriter", grid.} = object
   ## ILDG field writer
 
-proc isBoss*(g: ptr Grid): bool {.importcpp: "#->IsBoss()", grid.}
-  ## Returns true on the I/O boss rank (rank 0).
-
-proc isBoss*(g: var Grid): bool = isBoss(addr g)
-
 const
   gridFormat* = "grid-format"
   ildgFormat* = "ildg-format"
@@ -163,9 +158,7 @@ proc writeObject*(
   mb, me: cint; 
   obj: var Record;
   objectName, recordName: string
-) =
-  ## Write a ``Record`` (Grid ``scidacRecord``) record.
-  w.writeObjectImpl(mb, me, obj, objectName.cstring, recordName.cstring)
+) = w.writeObjectImpl(mb, me, obj, objectName.cstring, recordName.cstring)
 
 #[ LIME misc ]#
 
@@ -235,14 +228,12 @@ template write*(w: var SciDACWriter; filename: string; work: untyped): untyped =
 
 #[ ILDG read facilities ]#
 
-proc newILDGReader*: ILDGReader 
-  {.importcpp: "Grid::IldgReader()", grid, constructor.}
+proc newILDGReader*: ILDGReader {.importcpp: "Grid::IldgReader()", grid, constructor.}
 
 proc open*(r: var ILDGReader; filename: cstring) 
   {.importcpp: "#.open(std::string(#))", grid.}
 
-proc close*(r: var ILDGReader) 
-  {.importcpp: "#.close()", grid.}
+proc close*(r: var ILDGReader) {.importcpp: "#.close()", grid.}
 
 proc readConfiguration*(r: var ILDGReader; field: var GaugeField; header: var Header) 
   {.importcpp: "#.readConfiguration(#, #)", grid.}

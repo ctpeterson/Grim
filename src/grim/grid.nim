@@ -79,8 +79,18 @@ type SitesKind* = enum
 
 type DispatchKind = enum dkAccelerator, dkHost
 
+type RealD* {.importcpp: "Grid::RealD", grid.} = object
+type RealF* {.importcpp: "Grid::RealF", grid.} = object
+
 type ComplexD* {.importcpp: "Grid::ComplexD", grid.} = object
 type ComplexF* {.importcpp: "Grid::ComplexF", grid.} = object
+
+when DefaultPrecision == 32:
+  type Real = RealF
+  type Complex = ComplexF
+else:
+  type Real = RealD
+  type Complex = ComplexD
 
 #[ initialization/finalization ]#
 
@@ -183,6 +193,10 @@ template newRedBlackCartesian*(grid: var Cartesian): RedBlackCartesian =
   ## Constructs a `RedBlackCartesian` (checkerboard) grid from a
   ## `Cartesian` grid.
   newRedBlackCartesian(addr grid)
+
+proc isBoss*(g: ptr Grid): bool {.importcpp: "#->IsBoss()", grid.}
+
+proc isBoss*(g: var Grid): bool = isBoss(addr g)
 
 proc iSites*(grid: Grid): cint 
   {.importcpp: "#.iSites()", grid.}

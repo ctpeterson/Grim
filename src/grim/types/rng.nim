@@ -32,15 +32,22 @@ import grid
 header()
 
 type ParallelRNG* {.importcpp: "Grid::GridParallelRNG", grid.} = object
+type SerialRNG* {.importcpp: "Grid::GridSerialRNG", grid.} = object
 
 proc newParallelRNG(grid: ptr Grid): ParallelRNG
   {.importcpp: "Grid::GridParallelRNG(@)", grid, constructor.}
+
+proc newSerialRNG(grid: ptr Grid): SerialRNG
+  {.importcpp: "Grid::GridSerialRNG(@)", grid, constructor.}
 
 proc toInt[T](s: seq[T]): seq[int] =
   result = newSeq[int](s.len)
   for i in 0..<s.len: result[i] = int(s[i])
 
 proc seed(rng: var ParallelRNG; seeds: Vector[cint]) 
+  {.importcpp: "#.SeedFixedIntegers(@)", grid.}
+
+proc seed(rng: var SerialRNG; seeds: Vector[cint]) 
   {.importcpp: "#.SeedFixedIntegers(@)", grid.}
 
 proc seed*(rng: var ParallelRNG; seeds: seq[int]) =
@@ -50,8 +57,16 @@ proc seed*(rng: var ParallelRNG; seeds: seq[int]) =
 
 template newParallelRNG*(grid: var Grid): untyped = newParallelRNG(addr grid)
 
+template newSerialRNG*(grid: var Grid): untyped = newSerialRNG(addr grid)
+
 template newParallelRNG*(grid: var Grid; seeds: seq[int]): untyped =
   block:
     var rng = newParallelRNG(addr grid)
+    rng.seed(seeds)
+    rng
+
+template newSerialRNG*(grid: var Grid; seeds: seq[int]): untyped =
+  block:
+    var rng = newSerialRNG(addr grid)
     rng.seed(seeds)
     rng
