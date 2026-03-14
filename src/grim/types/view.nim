@@ -100,6 +100,14 @@ macro newViewType*(name: untyped): untyped =
     proc view*(field: var `nameF`, mode: ViewMode): `viewNameF`
       {.importcpp: "#.View(@)", grid.}
 
+    # Context-aware view constructors — resolve Access via dispatchKind
+    template view*(field: var `name`, access: static Access): `viewName` =
+      field.view(viewMode(access))
+    template view*(field: var `nameD`, access: static Access): `viewNameD` =
+      field.view(viewMode(access))
+    template view*(field: var `nameF`, access: static Access): `viewNameF` =
+      field.view(viewMode(access))
+
     # size, begin, end
     proc size*(v: `viewName`): uint64 {.importcpp: "#.size()", grid.}
     proc size*(v: `viewNameD`): uint64 {.importcpp: "#.size()", grid.}

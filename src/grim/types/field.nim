@@ -122,7 +122,14 @@ macro newFieldType*(name: untyped): untyped =
     proc base*(field: var `name`): ptr Base {.importcpp: "#.Grid()", grid.}
     proc base*(field: var `nameD`): ptr Base {.importcpp: "#.Grid()", grid.}
     proc base*(field: var `nameF`): ptr Base {.importcpp: "#.Grid()", grid.}
-    
+  
+    template cartesian*(field: var `name`): ptr Cartesian =
+      cast[ptr Cartesian](field.base())
+    template cartesian*(field: var `nameD`): ptr Cartesian =
+      cast[ptr Cartesian](field.base())
+    template cartesian*(field: var `nameF`): ptr Cartesian =
+      cast[ptr Cartesian](field.base())
+
     # checkerboard getter
     proc `cbGetter`*(field: var `name`): cint 
       {.importcpp: "#.Checkerboard()", grid.}
@@ -215,11 +222,11 @@ macro newFieldType*(name: untyped): untyped =
       {.importcpp: "#.Extract(#)", grid.}
     
     # halo exchange
-    proc exchange*(cell: PaddedCell; src: var `name`) = 
+    proc exchange*(cell: var PaddedCell; src: var `name`) = 
       src = cell.expand(cell.extract(src))
-    proc exchange*(cell: PaddedCell; src: var `nameD`) = 
+    proc exchange*(cell: var PaddedCell; src: var `nameD`) = 
       src = cell.expand(cell.extract(src))
-    proc exchange*(cell: PaddedCell; src: var `nameF`) = 
+    proc exchange*(cell: var PaddedCell; src: var `nameF`) = 
       src = cell.expand(cell.extract(src))
     
     # random uniform initialization

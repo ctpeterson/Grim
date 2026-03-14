@@ -41,8 +41,8 @@ const DefaultPrecision* {.intdefine.} = 64
   ## Default floating-point precision in bits (32 or 64).
   ## Override at compile time with ``-d:DefaultPrecision=32``.
 
-const nd* = 4
-  ## Number of spacetime dimensions. Grid is always 4-dimensional.
+const nd* {.importcpp: "Grid::Nd", grid.} = 4
+const nc* {.importcpp: "Grid::Nc", grid.} = 3
 
 type
   Coordinate* {.importcpp: "Grid::Coordinate", grid, bycopy.} = object
@@ -79,6 +79,25 @@ type SitesKind* = enum
 
 type DispatchKind = enum dkAccelerator, dkHost
 
+type Access* = enum
+  ## Context-neutral access mode for views. The enclosing `accelerator`
+  ## or `host` block determines the actual `ViewMode`.
+  Read         ## Read-only access.
+  Write        ## Read-write access.
+  WriteDiscard ## Write-only access (prior contents discarded).
+
+template viewMode*(access: static Access): ViewMode =
+  ## Resolves a context-neutral `Access` to the correct `ViewMode`
+  ## based on the enclosing `accelerator` or `host` block.
+  when dispatchKind == dkAccelerator:
+    when access == Read: AcceleratorRead
+    elif access == Write: AcceleratorWrite
+    else: AcceleratorWriteDiscard
+  else:
+    when access == Read: HostRead
+    elif access == Write: HostWrite
+    else: HostWrite  # Grid has no HostWriteDiscard; HostWrite is the closest
+
 type RealD* {.importcpp: "Grid::RealD", grid.} = object
 type RealF* {.importcpp: "Grid::RealF", grid.} = object
 
@@ -86,12 +105,12 @@ type ComplexD* {.importcpp: "Grid::ComplexD", grid.} = object
 type ComplexF* {.importcpp: "Grid::ComplexF", grid.} = object
 
 when DefaultPrecision == 32:
-  type Real = RealF
-  type Complex = ComplexF
+  type Real* = RealF
+  type Complex* = ComplexF
 else:
-  type Real = RealD
-  type Complex = ComplexD
-
+  type Real* = RealD
+  type Complex* = ComplexD
+  
 #[ initialization/finalization ]#
 
 proc cargc: cint = cint(paramCount() + 1)
@@ -225,16 +244,21 @@ proc sitesCount(grid: ptr Grid; kind: SitesKind): cint =
   of localSites: grid[].lSites
   of globalSites: grid[].gSites
 
+proc volume*(grid: ptr Grid): cint = grid.sitesCount(globalSites)
+
 #[ padded cell facilities ]#
 
 proc newPaddedCell(depth: cint; grid: ptr Cartesian): PaddedCell 
   {.importcpp: "Grid::PaddedCell(@)", grid, constructor.}
 
-template newPaddedCell*(grid: var Cartesian; depth: cint = 1): untyped =
+template newPaddedCell*(grid: var Cartesian; depth: int = 1): untyped =
   ## Creates a `PaddedCell` around `grid` with the given halo `depth`
   ## (default 1). The padded cell manages halo exchange and extraction
   ## for stencil operations.
-  newPaddedCell(depth, addr grid)
+  newPaddedCell(cint(depth), addr grid)
+
+template newPaddedCell*(grid: ptr Cartesian; depth: int = 1): untyped =
+  newPaddedCell(cint(depth), grid)
 
 proc newPaddedGrid(cell: PaddedCell): ptr Cartesian 
   {.importcpp: "#.grids.back()", grid.}
