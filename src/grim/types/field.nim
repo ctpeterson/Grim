@@ -550,8 +550,32 @@ proc tracelessAntihermitianProjection*(src: LatticeGaugeFieldF): LatticeGaugeFie
 proc reorthogonalize*(field: var GaugeLinkField) 
   {.importcpp: "Grid::ProjectOnGroup(@)", grid.}
 
-proc exponentiate*(field: GaugeLinkField; alpha: float64 = 1.0; nexp: int = 12): auto
-  {.importcpp: "Grid::Exponentiate(#, #, #)", grid.}
+proc reorthogonalize*(field: var GaugeField) =
+  ## Reorthogonalize all Lorentz components of a gauge field.
+  for mu in 0..<nd:
+    var fmu = field[mu]
+    fmu.reorthogonalize()
+    field[mu] = fmu
+
+proc randomLieAlgebra*(rng: var ParallelRNG; field: var LatticeColorMatrix; scale: float64 = 1.0)
+  {.importcpp: "Grid::SU<Grid::Nc>::GaussianFundamentalLieAlgebraMatrix(#, #, #)", grid.}
+proc randomLieAlgebra*(rng: var ParallelRNG; field: var LatticeColorMatrixD; scale: float64 = 1.0)
+  {.importcpp: "Grid::SU<Grid::Nc>::GaussianFundamentalLieAlgebraMatrix(#, #, #)", grid.}
+proc randomLieAlgebra*(rng: var ParallelRNG; field: var LatticeColorMatrixF; scale: float64 = 1.0)
+  {.importcpp: "Grid::SU<Grid::Nc>::GaussianFundamentalLieAlgebraMatrix(#, #, #)", grid.}
+
+proc randomLieAlgebra*(rng: var ParallelRNG; field: var GaugeField; scale: float64 = 1.0) =
+  for mu in 0..<nd:
+    var fieldmu = field[mu]
+    rng.randomLieAlgebra(fieldmu, scale)
+    field[mu] = fieldmu
+
+proc exponential*(field: LatticeColorMatrix; alpha: float64 = 1.0; nexp: int = 12): LatticeColorMatrix
+  {.importcpp: "Grid::expMat(#, #, #)", grid.}
+proc exponential*(field: LatticeColorMatrixD; alpha: float64 = 1.0; nexp: int = 12): LatticeColorMatrixD
+  {.importcpp: "Grid::expMat(#, #, #)", grid.}
+proc exponential*(field: LatticeColorMatrixF; alpha: float64 = 1.0; nexp: int = 12): LatticeColorMatrixF
+  {.importcpp: "Grid::expMat(#, #, #)", grid.}
 
 proc determinant*(src: LatticeColorMatrix): LatticeComplex
   {.importcpp: "Grid::Determinant(@)", grid.}
@@ -696,6 +720,13 @@ proc traceNorm2*(src: LatticeColorMatrixD): float64
   {.importcpp: "Grid::norm2(@)", grid.}
 proc traceNorm2*(src: LatticeColorMatrixF): float32
   {.importcpp: "(float)Grid::norm2(@)", grid.}
+
+proc traceNorm2*(src: GaugeField): float64 =
+  ## Returns the sum of traceNorm2 over Lorentz components.
+  var sum: float64 = 0.0
+  for mu in 0 ..< nd:
+    sum += traceNorm2(src[mu])
+  sum
 
 proc `><`*(a, b: LatticeColorVector): LatticeColorMatrix
   {.importcpp: "Grid::outerProduct(@)", grid.}

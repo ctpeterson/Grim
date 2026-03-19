@@ -26,9 +26,9 @@
   CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ]#
 
-import std/[cmdline]
-import std/[os]
 import std/[macros]
+
+import utils/[commandline]
 
 template header*: untyped =
   ## Emits the ``{.pragma: grid, header: "<Grid/Grid.h>".}`` pragma so that
@@ -112,14 +112,6 @@ else:
   type Complex* = ComplexD
   
 #[ initialization/finalization ]#
-
-proc cargc: cint = cint(paramCount() + 1)
-
-proc cargv(argc: cint): cstringArray =
-  var argv = newSeq[string](argc)
-  argv[0] = getAppFilename()
-  for idx in 1..<argv.len: argv[idx] = paramStr(idx)
-  return allocCStringArray(argv)
 
 proc grid_init(argc: ptr cint, argv: ptr cstringArray) 
   {.importcpp: "Grid::Grid_init(@)", grid.}

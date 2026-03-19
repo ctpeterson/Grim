@@ -29,7 +29,7 @@
 import cpp
 import grid
 
-import types/[field]
+import types/[field, rng]
 
 header()
 
@@ -172,6 +172,58 @@ template write*(w: var LimeWriter; filename: string; work: untyped): untyped =
   block: work
   w.close()
 
+#[ RNG read/write facilities ]#
+
+proc readRNGImpl(
+  serial: var SerialRNG;
+  parallel: var ParallelRNG;
+  filename: cstring;
+  offset: uint64;
+  nerscCsum, scidacCsumA, scidacCsumB: var uint32
+) {.importcpp: "Grid::BinaryIO::readRNG(#, #, std::string(#), #, #, #, #)", grid.}
+
+proc readRNG*(
+  serial: var SerialRNG;
+  parallel: var ParallelRNG;
+  filename: string;
+  offset: uint64 = 0
+) =
+  var nerscCsum, scidacCsumA, scidacCsumB: uint32
+  readRNGImpl(
+    serial, 
+    parallel, 
+    filename.cstring, 
+    offset,
+    nerscCsum, 
+    scidacCsumA, 
+    scidacCsumB
+  )
+
+proc writeRNGImpl(
+  serial: var SerialRNG;
+  parallel: var ParallelRNG;
+  filename: cstring;
+  offset: uint64;
+  nerscCsum, scidacCsumA, scidacCsumB: var uint32
+) {.importcpp: "Grid::BinaryIO::writeRNG(#, #, std::string(#), #, #, #, #)", grid.}
+
+proc writeRNG*(
+  serial: var SerialRNG;
+  parallel: var ParallelRNG;
+  filename: string;
+  offset: uint64 = 0
+) =
+  var nerscCsum, scidacCsumA, scidacCsumB: uint32
+  writeRNGImpl(
+    serial, 
+    parallel, 
+    filename.cstring, 
+    offset,
+    nerscCsum, 
+    scidacCsumA, 
+    scidacCsumB
+  )
+
 #[ SciDAC read facilities ]#
 
 proc newSciDACReader*: SciDACReader 
@@ -289,16 +341,116 @@ template write*(w: var ILDGWriter; filename: string; work: untyped): untyped =
 #[ tests ]#
 
 when isMainModule:
+  import std/os
+
+  const tol = 1e-12
+  const rngFile = "test_rng.bin"
+
+  proc `~=`(a, b: float64): bool =
+    let scale = max(abs(a), max(abs(b), 1.0))
+    abs(a - b) < tol * scale
+
+  proc pass(name: string) = print "  [PASS]", name
+  proc fail(name: string; msg: string = "") =
+    print "  [FAIL]", name, msg
+    quit(1)
+
+  template test(name: string; body: untyped) =
+    block:
+      body
+      pass(name)
+
   grid:
+    print "===== lime.nim unit tests ====="
+
     var grid = newCartesian()
     var gauge = grid.newGaugeField()
 
-    # Read a QEX-written SciDAC file using the low-level LIME reader
-    var lime = newLimeReader()
-    lime.read("./src/grim/io/sample/ildg.lat"):
-      lime.readConfiguration(gauge)
+    # ── LIME gauge field round-trip ──────────────────────────────────────
 
-    # Write it back out
-    var limeW = newLimeWriter(grid)
-    limeW.write("test_lime.lat"):
-      limeW.writeConfiguration(gauge)
+    test "LIME gauge read":
+      var reader = newLimeReader()
+      reader.read("./src/grim/io/sample/ildg.lat"):
+        reader.readConfiguration(gauge)
+      let n2 = traceNorm2(gauge[0])
+      assert n2 > 0.0
+
+    test "LIME gauge write + re-read":
+      var writer = newLimeWriter(grid)
+      writer.write("test_lime.lat"):
+        writer.writeConfiguration(gauge)
+      var gauge2 = grid.newGaugeField()
+      var reader = newLimeReader()
+      reader.read("test_lime.lat"):
+        reader.readConfiguration(gauge2)
+      for mu in 0..3:
+        let diff = traceNorm2(gauge[mu]) - traceNorm2(gauge2[mu])
+        assert abs(diff) < tol
+      removeFile("test_lime.lat")
+
+    # ── RNG write / read round-trip ──────────────────────────────────────
+
+    var pRNG = grid.newParallelRNG()
+    pRNG.seed(@[1, 2, 3, 4])
+    var sRNG = newSerialRNG()
+    sRNG.seed(@[5, 6, 7, 8])
+
+    test "RNG write + read reproduces hot-start field":
+      # Step 1: advance RNG to a known state
+      var warmup = grid.newGaugeField()
+      pRNG.hot(warmup)
+
+      # Step 2: save the RNG state
+      writeRNG(sRNG, pRNG, rngFile)
+
+      # Step 3: draw a field from the current RNG state → "reference"
+      var ref1 = grid.newGaugeField()
+      pRNG.hot(ref1)
+      var refNorm: array[4, float64]
+      for mu in 0..3: refNorm[mu] = traceNorm2(ref1[mu])
+
+      # Step 4: advance RNG further (clobber state)
+      var junk = grid.newGaugeField()
+      pRNG.hot(junk)
+
+      # Step 5: restore the saved RNG state
+      readRNG(sRNG, pRNG, rngFile)
+
+      # Step 6: draw again → should reproduce "reference"
+      var check = grid.newGaugeField()
+      pRNG.hot(check)
+      for mu in 0..3:
+        let n2 = traceNorm2(check[mu])
+        print "  mu=", mu, " ref=", refNorm[mu], " check=", n2
+        if not (n2 ~= refNorm[mu]):
+          fail("RNG round-trip mu=" & $mu &
+               ": expected " & $refNorm[mu] & " got " & $n2)
+
+    test "RNG restore + gaussian reproduces identical field":
+      # Restore the same checkpoint again
+      readRNG(sRNG, pRNG, rngFile)
+
+      # Skip the hot-start draw that was the "reference"
+      var skip = grid.newGaugeField()
+      pRNG.hot(skip)
+
+      # Now draw a gaussian field
+      var gRef = grid.newGaugeLinkField()
+      pRNG.gaussian(gRef)
+      let gRefNorm = traceNorm2(gRef)
+
+      # Restore again and repeat
+      readRNG(sRNG, pRNG, rngFile)
+      pRNG.hot(skip)  # same skip
+      var gChk = grid.newGaugeLinkField()
+      pRNG.gaussian(gChk)
+      let gChkNorm = traceNorm2(gChk)
+
+      print "  gaussian ref=", gRefNorm, " check=", gChkNorm
+      if not (gChkNorm ~= gRefNorm):
+        fail("gaussian round-trip: expected " & $gRefNorm & " got " & $gChkNorm)
+
+    # clean up
+    removeFile(rngFile)
+
+    print "===== all lime.nim tests passed ====="

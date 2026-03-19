@@ -26,13 +26,36 @@
   CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ]#
 
+#[imports ]#
+
 import grid            # base Grid API
 
 import types/[stencil]  # general local stencil
-import types/[fielddsl] # field types
+import types/[field]    # field types
 import types/[view]     # field views
+import types/[rng]      # random number generators
+
+import action/[gaugeaction] # gauge action and force
+
+import dsl/[fielddsl] # field dsl
+
+import io/[lime]
+
+import utils/[commandline]
+
+#[ exports ]#
 
 export grid
+
+export field
 export stencil
-export fielddsl
 export view
+export rng
+
+export gaugeaction
+
+export fielddsl
+
+export lime
+
+export commandline

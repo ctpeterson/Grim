@@ -37,8 +37,8 @@ type SerialRNG* {.importcpp: "Grid::GridSerialRNG", grid.} = object
 proc newParallelRNG(grid: ptr Grid): ParallelRNG
   {.importcpp: "Grid::GridParallelRNG(@)", grid, constructor.}
 
-proc newSerialRNG(grid: ptr Grid): SerialRNG
-  {.importcpp: "Grid::GridSerialRNG(@)", grid, constructor.}
+proc newSerialRNG*(): SerialRNG
+  {.importcpp: "Grid::GridSerialRNG()", grid, constructor.}
 
 proc toInt[T](s: seq[T]): seq[int] =
   result = newSeq[int](s.len)
@@ -55,18 +55,31 @@ proc seed*(rng: var ParallelRNG; seeds: seq[int]) =
   for i in 0..<seeds.len: cintSeeds[i] = cint(seeds[i])
   rng.seed(cintSeeds.toVector())
 
+proc seed*(rng: var SerialRNG; seeds: seq[int]) =
+  var cintSeeds = newSeq[cint](seeds.len)
+  for i in 0..<seeds.len: cintSeeds[i] = cint(seeds[i])
+  rng.seed(cintSeeds.toVector())
+
+proc intToSeeds(n: int): seq[int] =
+  ## Decompose an integer into its decimal digits.
+  var x = abs(n)
+  if x == 0: return @[0]
+  while x > 0:
+    result.insert(x mod 10, 0)
+    x = x div 10
+
+proc seed*(rng: var ParallelRNG; seed: int) =
+  ## Seed with a single integer, decomposed into its decimal digits.
+  rng.seed(intToSeeds(seed))
+
+proc seed*(rng: var SerialRNG; seed: int) =
+  ## Seed with a single integer, decomposed into its decimal digits.
+  rng.seed(intToSeeds(seed))
+
+proc uniform*(rng: var SerialRNG): float64 =
+  ## Draw a uniform random number in [0, 1) from the serial RNG.
+  var x: float64
+  {.emit: ["Grid::random(", rng, ", ", x, ");"].}
+  result = x
+
 template newParallelRNG*(grid: var Grid): untyped = newParallelRNG(addr grid)
-
-template newSerialRNG*(grid: var Grid): untyped = newSerialRNG(addr grid)
-
-template newParallelRNG*(grid: var Grid; seeds: seq[int]): untyped =
-  block:
-    var rng = newParallelRNG(addr grid)
-    rng.seed(seeds)
-    rng
-
-template newSerialRNG*(grid: var Grid; seeds: seq[int]): untyped =
-  block:
-    var rng = newSerialRNG(addr grid)
-    rng.seed(seeds)
-    rng

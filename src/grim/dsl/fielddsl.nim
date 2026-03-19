@@ -35,8 +35,6 @@ import grid
 import types/[field]
 import types/[view]
 
-export field
-
 # collects identifiers from syntax tree and transforms them into view declarations
 proc declViews(
   assn: var seq[NimNode]; 
@@ -116,7 +114,7 @@ macro promote(ident: untyped; lhs, rhs: untyped): untyped =
   # step 3: wrap everything in an accelerator for loop
   let nIdent = ident"n"
   let gridIdent = ident"lhsGrid"
-  let gridDecl = newVarStmt(gridIdent, newCall(ident"layout", lhs))
+  let gridDecl = newVarStmt(gridIdent, newCall(ident"base", lhs))
   let forLoop = newTree(nnkForStmt, nIdent, newCall(ident"sites", gridIdent), newExpr)
 
   result = quote do:

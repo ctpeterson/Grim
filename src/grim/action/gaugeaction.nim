@@ -28,28 +28,28 @@
 
 import grid
 
-import dsl/[fielddsl]
+import types/[field]
 import types/[view]
 import types/[stencil]
 
 type GaugeAction* = object
-  plaquette*: float64
-  rectangle*: float64
-  parallelogram*: float64
+  plaquette*: float
+  rectangle*: float
+  parallelogram*: float
 
 proc newGaugeAction*(
-  beta: float64,
-  cp, cr, cpg: float64 = 0.0
+  beta: float,
+  cp, cr, cpg: float = 0.0
 ): GaugeAction =
   result = GaugeAction(plaquette: cp, rectangle: cr, parallelogram: cpg)
   result.plaquette *= beta
   result.rectangle *= beta
   result.parallelogram *= beta
 
-proc newGaugeAction*(cp, cr, cpg: float64 = 0.0): GaugeAction =
+proc newGaugeAction*(cp, cr, cpg: float = 0.0): GaugeAction =
   return GaugeAction(plaquette: cp, rectangle: cr, parallelogram: cpg)
 
-proc action*(ctx: GaugeAction; tu: var GaugeField): float64 =
+proc action*(ctx: GaugeAction; tu: var GaugeField): float =
   #[ preparation ]#
 
   # "tight" (unpadded) grid, padded cell, and padded grid
@@ -59,8 +59,8 @@ proc action*(ctx: GaugeAction; tu: var GaugeField): float64 =
 
   # parameters for prefactors and coefficients
   let volume = tgrid.volume
-  let norm = float64(nd*(nd-1)*volume)
-  let colors = float64(nc)
+  let norm = float(nd*(nd-1)*volume)
+  let colors = float(nc)
 
   # normalized coefficients
   let cp = ctx.plaquette / norm / colors
@@ -171,9 +171,9 @@ proc force*(ctx: GaugeAction; tu: var GaugeField; tf: var GaugeField) =
   var pgrid = cell.paddedGrid()
 
   # normalized coefficients
-  let cp = 0.5 * ctx.plaquette / float64(nc)
-  let cr = 0.5 * ctx.rectangle / float64(nc)
-  let cpg = ctx.parallelogram / float64(nc)
+  let cp = ctx.plaquette / float(nc)
+  let cr = ctx.rectangle / float(nc)
+  let cpg = ctx.parallelogram / float(nc)
 
   var pu = cell.expand(tu) # padded gauge field
   var pf = pgrid.newGaugeField() # padded force field
@@ -290,8 +290,7 @@ proc force*(ctx: GaugeAction; tu: var GaugeField; tf: var GaugeField) =
     pf[mu] = resultmu
 
   var ef = cell.extract(pf)
-  for mu in 0..<nd:
-    tf[mu] = -tracelessAntihermitianProjection(ef[mu]*tu[mu])
+  for mu in 0..<nd: tf[mu] = -tracelessAntihermitianProjection(ef[mu]*adjoint(tu[mu]))
 
 when isMainModule:
   import std/times
@@ -311,17 +310,21 @@ when isMainModule:
     reader.read("./src/grim/io/sample/ildg.lat"):
       reader.readConfiguration(gauge)
     
-    let reference = 15275.754544798301
+    let gaugeReference = 15275.754544798518  # computed by QEX gaugeAction1
+    let forceReference = -344854.91941147903  # computed by QEX gaugeForce + gaugeAction1
 
     var t0 = cpuTime()
-    let result = act.action(gauge)
+    var result = act.action(gauge)
     var t1 = cpuTime()
-    let difference = (result - reference)/reference
-    print "reference: ", reference, " result: ", result, " difference: ", difference
+    var difference = (result - gaugeReference)/gaugeReference
+    print "reference: ", gaugeReference, " result: ", result, " difference: ", difference
     print "action time: ", t1 - t0, " s"
 
     var force = grid.newGaugeField()
     t0 = cpuTime()
     act.force(gauge, force)
+    result = act.action(force)
     t1 = cpuTime()
+    difference = (result - forceReference)/forceReference
+    print "reference: ", forceReference, " result: ", result, " difference: ", difference
     print "force time: ", t1 - t0, " s"

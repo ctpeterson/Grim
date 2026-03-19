@@ -136,10 +136,14 @@ echo "-- C++:  $CC${CXX_PATH:+ ($CXX_PATH)} (Nim --cc:$NIM_CC)"
 # ── Create directories ──────────────────────────────────────────────────
 mkdir -p "${CWD}/build" "${CWD}/bin" "${CWD}/cache"
 
-# ── Symlink src/ from project root if not present ────────────────────────
+# ── Symlink src/ and examples/ from project root if not present ──────────
 if [ ! -e "${CWD}/src" ] && [ -d "${SCRIPT_DIR}/src" ]; then
     ln -snf "${SCRIPT_DIR}/src" "${CWD}/src"
     echo "-- Symlinked src -> ${SCRIPT_DIR}/src"
+fi
+if [ ! -e "${CWD}/examples" ] && [ -d "${SCRIPT_DIR}/examples" ]; then
+    ln -snf "${SCRIPT_DIR}/examples" "${CWD}/examples"
+    echo "-- Symlinked examples -> ${SCRIPT_DIR}/examples"
 fi
 
 # ── Generate nim.cfg ─────────────────────────────────────────────────────
@@ -192,10 +196,11 @@ NIMS_HEADER
 cat >> "$NIMS" <<NIMS_CONFIG
 ### configuration — written by configure ###
 
-const cwd      = getCurrentDir()
-const nimCache = cwd / "cache"
-const srcDir   = cwd / "src"
-const nim      = "${NIM}"
+const cwd         = getCurrentDir()
+const nimCache    = cwd / "cache"
+const srcDir      = cwd / "src"
+const examplesDir = cwd / "examples"
+const nim         = "${NIM}"
 const compiler = "${NIM_CC}"
 const gridCfg  = "${GRID_CONFIG}"
 
@@ -209,24 +214,31 @@ NIMS_CONFIG
 cat >> "$NIMS" <<'NIMS_BODY'
 ### build logic ###
 
-proc search(dir, src: string): string {.raises: [IOError].} =
-  ## Recursively search `dir` for `src.nim` and return its path.
-  for entry in walkDirRec(dir):
-    if entry.splitPath().tail == src & ".nim":
-      return string(entry)
-  raise newException(IOError, src & ".nim not found under " & dir)
+const searchDirs = [srcDir, examplesDir]
+
+proc search(src: string): string {.raises: [IOError].} =
+  ## Recursively search source directories for `src.nim`.
+  for dir in searchDirs:
+    if dirExists(dir):
+      for entry in walkDirRec(dir):
+        if entry.splitPath().tail == src & ".nim":
+          return string(entry)
+  raise newException(IOError, src & ".nim not found under " &
+    searchDirs.join(", "))
 
 task clean, "remove compiled binaries and cache":
   exec "rm -rf" + cwd / "bin/*"
   exec "rm -rf" + nimCache
 
-task list, "list available build targets in src/":
-  echo "Available targets in " & srcDir & ":"
-  for entry in walkDirRec(srcDir):
-    if entry.endsWith(".nim"):
-      echo "  " & entry.relativePath(srcDir).changeFileExt("")
+task list, "list available build targets":
+  for dir in searchDirs:
+    if dirExists(dir):
+      echo "Available targets in " & dir & ":"
+      for entry in walkDirRec(dir):
+        if entry.endsWith(".nim"):
+          echo "  " & entry.relativePath(dir).changeFileExt("")
 
-task build, "compile a Nim source from src/":
+task build, "compile a Nim source":
   var passC = "-Ofast" + passC_Grid
   var passL = "-Wl,--start-group" + passL_Grid + "-Wl,--end-group"
 
@@ -247,13 +259,15 @@ task build, "compile a Nim source from src/":
     return
 
   let target = args[^1]
-  let nimSrc = search(srcDir, target)
+  let nimSrc = search(target)
 
   var cmpl = nim + "cpp"
-  cmpl += "--path:" & srcDir
-  # Add all subdirectories as search paths so bare imports resolve
-  for d in walkDirRec(srcDir, yieldFilter = {pcDir}):
-    cmpl += "--path:" & d
+  # Add all source roots and their subdirectories as search paths
+  for dir in searchDirs:
+    if dirExists(dir):
+      cmpl += "--path:" & dir
+      for d in walkDirRec(dir, yieldFilter = {pcDir}):
+        cmpl += "--path:" & d
   cmpl += "--nimcache:" & nimCache
   cmpl += "--cc:" & compiler
   cmpl += "--passC:\"" & passC & "\""
