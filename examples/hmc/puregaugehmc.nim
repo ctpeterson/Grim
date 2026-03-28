@@ -78,11 +78,12 @@ grid:
     let lambda = 0.1931833275037836
     let dt = trajectoryLength / float(gaugeSteps)
     for step in 0..<gaugeSteps:
-      gaugeUpdate(lambda * dt)
+      if step == 0: gaugeUpdate(lambda * dt)
       momentumUpdate(0.5 * dt)
       gaugeUpdate((1.0 - 2.0*lambda) * dt)
       momentumUpdate(0.5 * dt)
-      gaugeUpdate(lambda * dt)
+      if step == gaugeSteps - 1: gaugeUpdate(lambda * dt)
+      else: gaugeUpdate(2.0 * lambda * dt)
     
   proc plaquette(tu: var GaugeField): float =
     # "tight" (unpadded) grid, padded cell, and padded grid
@@ -105,6 +106,7 @@ grid:
       for nu in 0..<mu:
         var unu = pu[nu]
         var tmp = pgrid.newComplexField()
+        
         accelerator:
           var astmuv = ast[mu].view(Read)
           var astnuv = ast[nu].view(Read)
@@ -122,7 +124,7 @@ grid:
             tmpv[n] = trace(ta*adjoint(tb))
         plaq += tmp * norm
 
-    return plaq.sum().re
+    return cell.extract(plaq).sum().re
 
   # io operations for gauge field & rng
   if start == "read":
