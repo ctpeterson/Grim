@@ -30,6 +30,8 @@ import std/[math]
 
 import grim
 
+import utils/[gaugeutils]
+
 # macro that takes in command line inputs; if not specified, default parameters 
 # provided here; for example, override beta with `--beta 8.0` on command line
 parameters: 
@@ -84,54 +86,11 @@ grid:
       momentumUpdate(0.5 * dt)
       if step == gaugeSteps - 1: gaugeUpdate(lambda * dt)
       else: gaugeUpdate(2.0 * lambda * dt)
-    
-  proc plaquette(tu: var GaugeField): float =
-    # "tight" (unpadded) grid, padded cell, and padded grid
-    var tgrid = tu.cartesian()
-    var cell = tgrid.newPaddedCell(depth = 1)
-    var pgrid = cell.paddedGrid()
-
-    # prefactor for normalization
-    let volume = tgrid.volume
-    let norm = 1.0 / float(nd*(nd-1)*volume*nc)
-
-    var pu = cell.expand(tu) # padded gauge field
-    var plaq = pgrid.newComplexField() # field to hold plaquette values
-    var ast = pgrid.newAxialStencil() # on-axis stencil
-
-    plaq.zero()
-
-    for mu in 1..<nd:
-      var umu = pu[mu]
-      for nu in 0..<mu:
-        var unu = pu[nu]
-        var tmp = pgrid.newComplexField()
-        
-        accelerator:
-          var astmuv = ast[mu].view(Read)
-          var astnuv = ast[nu].view(Read)
-
-          var umuv = umu.view(Read)
-          var unuv = unu.view(Read)
-          
-          var tmpv = tmp.view(Write)
-          
-          for n in sites(pgrid):
-            let n_pmu = astmuv[Forward][n]
-            let n_pnu = astnuv[Forward][n]
-            let ta = umuv[n]*unuv[n_pmu]
-            let tb = unuv[n]*umuv[n_pnu]
-            tmpv[n] = trace(ta*adjoint(tb))
-        plaq += tmp * norm
-
-    return cell.extract(plaq).sum().re
 
   # io operations for gauge field & rng
   if start == "read":
     let filename = filenameBase & "_" & $currentTrajectory
-    var reader = newLimeReader()
-    reader.read(filename & ".lat"):
-      reader.readConfiguration(u)
+    readConfiguration(u, filename & ".lat")
     readRNG(srng, prng, filename & ".rng")
   else:
     prng.seed(parallelSeed)
@@ -168,9 +127,7 @@ grid:
     # save gauge field and rng state
     if (trajectory + 1) mod saveFreq == 0:
       let filename = filenameBase & "_" & $(trajectory + 1)
-      var writer = grid.newLimeWriter()
-      writer.write(filename & ".lat"):
-        writer.writeConfiguration(u)
+      writeConfiguration(u, filename & ".lat")
       writeRNG(srng, prng, filename & ".rng")
 
 

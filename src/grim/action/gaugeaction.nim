@@ -37,10 +37,7 @@ type GaugeAction* = object
   rectangle*: float
   parallelogram*: float
 
-proc newGaugeAction*(
-  beta: float,
-  cp, cr, cpg: float = 0.0
-): GaugeAction =
+proc newGaugeAction*(beta: float, cp, cr, cpg: float = 0.0): GaugeAction =
   result = GaugeAction(plaquette: cp, rectangle: cr, parallelogram: cpg)
   result.plaquette *= beta
   result.rectangle *= beta
@@ -91,11 +88,11 @@ proc action*(ctx: GaugeAction; tu: var GaugeField): float =
 
       # calculate plaquette corners: needed for rectangle and plaquette
       accelerator:
-        var astmuv = ast[mu].view(Read)
-        var astnuv = ast[nu].view(Read)
+        let astmuv = ast[mu].view(Read)
+        let astnuv = ast[nu].view(Read)
 
-        var umuv = umu.view(Read)
-        var unuv = unu.view(Read)
+        let umuv = umu.view(Read)
+        let unuv = unu.view(Read)
         
         var tav = ta.view(Write)
         var tbv = tb.view(Write)
@@ -113,13 +110,13 @@ proc action*(ctx: GaugeAction; tu: var GaugeField): float =
       if ctx.rectangle != 0.0: 
         # left/right staples
         accelerator:
-          var astmuv = ast[mu].view(Read)
-          var astnuv = ast[nu].view(Read)
-          var dstmunuv = dst[mu, nu].view(Read)
+          let astmuv = ast[mu].view(Read)
+          let astnuv = ast[nu].view(Read)
+          let dstmunuv = dst[mu, nu].view(Read)
 
-          var umuv = umu.view(Read)
-          var unuv = unu.view(Read)
-          var tav = ta.view(Read)
+          let umuv = umu.view(Read)
+          let unuv = unu.view(Read)
+          let tav = ta.view(Read)
 
           var tcv = tc.view(Write)
           var tdv = td.view(Write)
@@ -136,13 +133,13 @@ proc action*(ctx: GaugeAction; tu: var GaugeField): float =
         
         # bottom/top staples
         accelerator:
-          var astmuv = ast[mu].view(Read)
-          var astnuv = ast[nu].view(Read)
-          var dstmunuv = dst[mu, nu].view(Read)
+          let astmuv = ast[mu].view(Read)
+          let astnuv = ast[nu].view(Read)
+          let dstmunuv = dst[mu, nu].view(Read)
 
-          var umuv = umu.view(Read)
-          var unuv = unu.view(Read)
-          var tbv = tb.view(Read)
+          let umuv = umu.view(Read)
+          let unuv = unu.view(Read)
+          let tbv = tb.view(Read)
 
           var tcv = tc.view(Write)
           var tdv = td.view(Write)
@@ -201,12 +198,12 @@ proc force*(ctx: GaugeAction; tu: var GaugeField; tf: var GaugeField) =
 
       # calculate upper and lower staples
       accelerator:
-        var astmuv = ast[mu].view(Read)
-        var astnuv = ast[nu].view(Read)
-        var dstmunuv = dst[mu, nu].view(Read)
+        let astmuv = ast[mu].view(Read)
+        let astnuv = ast[nu].view(Read)
+        let dstmunuv = dst[mu, nu].view(Read)
 
-        var umuv = umu.view(Read)
-        var unuv = unu.view(Read)
+        let umuv = umu.view(Read)
+        let unuv = unu.view(Read)
 
         var usv = us.view(Write)
         var bsv = bs.view(Write)
@@ -223,12 +220,12 @@ proc force*(ctx: GaugeAction; tu: var GaugeField; tf: var GaugeField) =
       # calculate left-right staples
       if ctx.rectangle != 0.0 or ctx.parallelogram != 0.0:
         accelerator:
-          var astmuv = ast[mu].view(Read)
-          var astnuv = ast[nu].view(Read)
-          var dstmunuv = dst[mu, nu].view(Read)
+          let astmuv = ast[mu].view(Read)
+          let astnuv = ast[nu].view(Read)
+          let dstmunuv = dst[mu, nu].view(Read)
 
-          var umuv = umu.view(Read)
-          var unuv = unu.view(Read)
+          let umuv = umu.view(Read)
+          let unuv = unu.view(Read)
 
           var rsv = rs.view(Write)
           var lsv = ls.view(Write)
@@ -256,17 +253,17 @@ proc force*(ctx: GaugeAction; tu: var GaugeField; tf: var GaugeField) =
         # rectangle staples: upper/lower staples constructed from 
         # upper, lower, left, and right staples
         accelerator:
-          var astmuv = ast[mu].view(Read)
-          var astnuv = ast[nu].view(Read)
-          var dstmunuv = dst[mu, nu].view(Read)
+          let astmuv = ast[mu].view(Read)
+          let astnuv = ast[nu].view(Read)
+          let dstmunuv = dst[mu, nu].view(Read)
 
-          var umuv = umu.view(Read)
-          var unuv = unu.view(Read)
+          let umuv = umu.view(Read)
+          let unuv = unu.view(Read)
 
-          var usv = us.view(Read)
-          var bsv = bs.view(Read)
-          var rsv = rs.view(Read)
-          var lsv = ls.view(Read)
+          let usv = us.view(Read)
+          let bsv = bs.view(Read)
+          let rsv = rs.view(Read)
+          let lsv = ls.view(Read)
 
           var tmpv = tmp.view(Write)
 

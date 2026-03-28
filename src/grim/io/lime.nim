@@ -95,6 +95,11 @@ proc readConfiguration*(
   recordName: string = scidacBinaryData
 ) = r.readConfigurationImpl(field, recordName.cstring)
 
+proc readConfiguration*(field: var Field; filename: string) =
+  var reader = newLimeReader()
+  reader.read(filename.cstring):
+    reader.readConfiguration(field)
+
 proc readObjectImpl(
   r: var LimeReader; 
   xmlstring: var CppString;
@@ -131,6 +136,13 @@ proc writeConfiguration*(
   field: var Field;
   recordName: string = scidacBinaryData
 ) = w.writeConfigurationImpl(field, recordName.cstring)
+
+proc writeConfiguration*(
+  field: var Field;
+  recordName: string = scidacBinaryData
+) =
+  var writer = newLimeWriterImpl(field.cartesian().isBoss())
+  writer.writeConfiguration(field, recordName)
 
 proc writeObjectImpl(
   w: var LimeWriter; 
@@ -294,6 +306,12 @@ proc readConfiguration*(r: var ILDGReader; field: var GaugeField) =
   var header = newHeader()
   r.readConfiguration(field, header)
 
+proc readConfiguration*(field: var GaugeField; filename: string) =
+  var reader = newILDGReader()
+  reader.open(filename.cstring)
+  reader.readConfiguration(field)
+  reader.close()
+
 #[ ILDG write facilities ]#
 
 proc newILDGWriterImpl(isBoss: bool): ILDGWriter 
@@ -325,6 +343,15 @@ proc writeConfiguration*(
   lfn: string = ""; 
   description: string = ""
 ) = w.writeConfiguration(field, sequence, lfn.cstring, description.cstring)
+
+proc writeConfiguration*(
+  field: var GaugeField;
+  sequence: cint = cint(0);
+  lfn: string = "";
+  description: string = ""
+) =
+  var writer = newILDGWriter()
+  writer.writeConfiguration(field, sequence, lfn.cstring, description.cstring)
 
 #[ ILDG misc ]#
 

@@ -158,6 +158,10 @@ for flag in $GRID_CXXFLAGS; do
     echo "  passC = \"$flag\"" >> "$NIM_CFG"
 done
 
+# Nim declares seq backing arrays as data[1] but allocates more at runtime;
+# silence the spurious C++ warning about out-of-bounds access.
+echo "  passC = \"-Wno-array-bounds\"" >> "$NIM_CFG"
+
 # Collect unique -L directories so we can emit -rpath for each one.
 # This ensures the runtime linker can find shared libraries without
 # requiring LD_LIBRARY_PATH.
@@ -239,7 +243,7 @@ task list, "list available build targets":
           echo "  " & entry.relativePath(dir).changeFileExt("")
 
 task build, "compile a Nim source":
-  var passC = "-Ofast" + passC_Grid
+  var passC = "-Ofast -Wno-array-bounds" + passC_Grid
   var passL = "-Wl,--start-group" + passL_Grid + "-Wl,--end-group"
 
   # Inject -rpath for every -L directory so the runtime linker can find
