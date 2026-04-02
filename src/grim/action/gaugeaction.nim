@@ -159,7 +159,7 @@ proc action*(ctx: GaugeAction; tu: var GaugeField): float =
   # return action
   return norm * cell.extract(action).sum().re
 
-proc force*(ctx: GaugeAction; tu: var GaugeField; tf: var GaugeField) =
+proc force*(ctx: GaugeAction; tu: var GaugeField): GaugeField =
   #[ preparation ]#
 
   # "tight" (unpadded) grid, padded cell, and padded grid
@@ -185,6 +185,8 @@ proc force*(ctx: GaugeAction; tu: var GaugeField; tf: var GaugeField) =
 
   var ast = pgrid.newAxialStencil()    # on-axis stencil
   var dst = pgrid.newDiagonalStencil() # diagonal stencil
+
+  #[ force calculation ]#
 
   for mu in 0..<nd:
     var umu = pu[mu]
@@ -286,8 +288,9 @@ proc force*(ctx: GaugeAction; tu: var GaugeField; tf: var GaugeField) =
     
     pf[mu] = resultmu
 
+  result = tgrid.newGaugeField()
   var ef = cell.extract(pf)
-  for mu in 0..<nd: tf[mu] = -tracelessAntihermitianProjection(ef[mu]*adjoint(tu[mu]))
+  for mu in 0..<nd: result[mu] = -tracelessAntihermitianProjection(ef[mu]*adjoint(tu[mu]))
 
 when isMainModule:
   import std/times
@@ -303,9 +306,7 @@ when isMainModule:
     var grid = newCartesian()
     var gauge = grid.newGaugeField()
 
-    var reader = newLimeReader()
-    reader.read("./src/grim/io/sample/ildg.lat"):
-      reader.readConfiguration(gauge)
+    readLimeConfiguration(gauge, "./src/grim/io/sample/ildg.lat")
     
     let gaugeReference = 15275.754544798518  # computed by QEX gaugeAction1
     let forceReference = -344854.91941147903  # computed by QEX gaugeForce + gaugeAction1
@@ -317,9 +318,8 @@ when isMainModule:
     print "reference: ", gaugeReference, " result: ", result, " difference: ", difference
     print "action time: ", t1 - t0, " s"
 
-    var force = grid.newGaugeField()
     t0 = cpuTime()
-    act.force(gauge, force)
+    var force = act.force(gauge)
     result = act.action(force)
     t1 = cpuTime()
     difference = (result - forceReference)/forceReference

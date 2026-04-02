@@ -32,43 +32,82 @@ import types/[field]
 import types/[view]
 import types/[stencil]
 
+#[
+type FatSevenLinkContext* = object
+  oneLink, threeLink, fiveLink, sevenLink: float
+  lepage, naik: float
+
+proc newFatSevenLinkContext(
+  oneLink, threeLink, fiveLink, sevenLink: float;
+  lepage, naik: float
+): FatSevenLinkContext = FatSevenLinkContext(
+    oneLink: oneLink,
+    threeLink: threeLink,
+    fiveLink: fiveLink,
+    sevenLink: sevenLink,
+    lepage: lepage,
+    naik: naik
+  )
+  
+template threeLinkStaple*()
+
+proc smear*(c: FatSevenLinkContext; tu: var GaugeField; su: var GaugeLinkField) =
+  # "tight" (unpadded) grid, padded cell, and padded grid
+  var tgrid = tu.cartesian()
+  var cell = tgrid.newPaddedCell(depth = 2)
+  var pgrid = cell.paddedGrid()
+
+  var pu = cell.expand(tu)
+  var psu = pgrid.newGaugeField()
+
+  var axialStencil = pgrid.newAxialStencil()
+  var diagStencil = pgrid.newDiagonalStencil()
+
+  for mu in 0..<nd:
+    psu[mu] = (c.oneLink - 6.0*c.lepage) * pu[mu]
+    for nu in 0..<nd:
+      if nu == mu: continue
+
+  su = cell.extract(psu)
+]#
+
 proc plaquette*(tu: var GaugeField): float =
-    # "tight" (unpadded) grid, padded cell, and padded grid
-    var tgrid = tu.cartesian()
-    var cell = tgrid.newPaddedCell(depth = 1)
-    var pgrid = cell.paddedGrid()
+  # "tight" (unpadded) grid, padded cell, and padded grid
+  var tgrid = tu.cartesian()
+  var cell = tgrid.newPaddedCell(depth = 1)
+  var pgrid = cell.paddedGrid()
 
-    # prefactor for normalization
-    let volume = tgrid.volume
-    let norm = 1.0 / float(nd*(nd-1)*volume*nc)
+  # prefactor for normalization
+  let volume = tgrid.volume
+  let norm = 2.0 / float(nd*(nd-1)*volume*nc)
 
-    var pu = cell.expand(tu) # padded gauge field
-    var plaq = pgrid.newComplexField() # field to hold plaquette values
-    var ast = pgrid.newAxialStencil() # on-axis stencil
+  var pu = cell.expand(tu) # padded gauge field
+  var plaq = pgrid.newComplexField() # field to hold plaquette values
+  var stencil = pgrid.newAxialStencil() # on-axis stencil
 
-    plaq.zero()
+  plaq.zero()
 
-    for mu in 1..<nd:
-      var umu = pu[mu]
-      for nu in 0..<mu:
-        var unu = pu[nu]
-        var tmp = pgrid.newComplexField()
+  for mu in 1..<nd:
+    var umu = pu[mu]
+    for nu in 0..<mu:
+      var unu = pu[nu]
+      var tmp = pgrid.newComplexField()
+      
+      accelerator:
+        let stencilmuv = stencil[mu].view(Read)
+        let stencilnuv = stencil[nu].view(Read)
+
+        let umuv = umu.view(Read)
+        let unuv = unu.view(Read)
         
-        accelerator:
-          let astmuv = ast[mu].view(Read)
-          let astnuv = ast[nu].view(Read)
+        var tmpv = tmp.view(Write)
+        
+        for n in sites(pgrid):
+          let n_pmu = stencilmuv[Forward][n]
+          let n_pnu = stencilnuv[Forward][n]
+          let ta = umuv[n]*unuv[n_pmu]
+          let tb = unuv[n]*umuv[n_pnu]
+          tmpv[n] = trace(ta*adjoint(tb))
+      plaq += tmp * norm
 
-          let umuv = umu.view(Read)
-          let unuv = unu.view(Read)
-          
-          var tmpv = tmp.view(Write)
-          
-          for n in sites(pgrid):
-            let n_pmu = astmuv[Forward][n]
-            let n_pnu = astnuv[Forward][n]
-            let ta = umuv[n]*unuv[n_pmu]
-            let tb = unuv[n]*umuv[n_pnu]
-            tmpv[n] = trace(ta*adjoint(tb))
-        plaq += tmp * norm
-
-    return cell.extract(plaq).sum().re
+  return cell.extract(plaq).sum().re

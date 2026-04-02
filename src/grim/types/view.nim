@@ -94,11 +94,11 @@ macro newViewType*(name: untyped): untyped =
 
     # View constructors — Lattice::View(mode) returns a LatticeView
     proc view*(field: var `name`, mode: ViewMode): `viewName`
-      {.importcpp: "#.View(@)", grid.}
+      {.importcpp: "gd(#).View(@)", grid.}
     proc view*(field: var `nameD`, mode: ViewMode): `viewNameD`
-      {.importcpp: "#.View(@)", grid.}
+      {.importcpp: "gd(#).View(@)", grid.}
     proc view*(field: var `nameF`, mode: ViewMode): `viewNameF`
-      {.importcpp: "#.View(@)", grid.}
+      {.importcpp: "gd(#).View(@)", grid.}
 
     # Context-aware view constructors — resolve Access via dispatchKind
     template view*(field: var `name`, access: static Access): `viewName` =
@@ -933,8 +933,8 @@ when isMainModule:
         for n in sites(grid):
           let site = ffV[n]
           rV[n] = site[0]  # peek spin 0
-      let origNorm = l2Norm2(cv)
-      let resultNorm = l2Norm2(result)
+      let origNorm = squareNorm2(cv)
+      let resultNorm = squareNorm2(result)
       assert origNorm ~= resultNorm
 
     # ── 24. site complex × color vector ──────────────────────────────────
@@ -952,8 +952,8 @@ when isMainModule:
         for n in sites(grid):
           resV[n] = cV[n] * vV[n]
       let latticeResult = c * v
-      let siteNorm = l2Norm2(result)
-      let latticeNorm = l2Norm2(latticeResult)
+      let siteNorm = squareNorm2(result)
+      let latticeNorm = squareNorm2(latticeResult)
       assert siteNorm ~= latticeNorm
 
     # ── 25. site U*U† = I (unitarity via site ops) ──────────────────────
@@ -1075,7 +1075,7 @@ when isMainModule:
         for n in sites(grid):
           rV[n] = v1V[n] + v2V[n]
       let lattice = v1 + v2
-      assert l2Norm2(result) ~= l2Norm2(lattice)
+      assert squareNorm2(result) ~= squareNorm2(lattice)
 
     # ── 32. site view size matches oSites ────────────────────────────────
     test "view size matches oSites":

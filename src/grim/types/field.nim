@@ -26,13 +26,21 @@
   CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ]#
 
-import std/[macros, strutils]
+import std/[macros] 
+import std/[os]
+import std/[strutils]
 
 import grid
 
 import rng
 
 header()
+
+# Field<T> shared_ptr wrapper lives in field.h alongside this file.
+# The header: "field.h" pragma on each Field type ensures it is
+# #included in every translation unit that uses a field.
+const grimFieldDir = currentSourcePath().parentDir
+{.passC: "-I" & grimFieldDir.}
 
 let Even* {.importcpp: "Grid::Even", grid.}: cint
 let Odd* {.importcpp: "Grid::Odd", grid.}: cint
@@ -76,6 +84,19 @@ macro newFieldType*(name: untyped): untyped =
   let cpp  = "Grid::" & cppBase
   let cppD = cpp & "D"
   let cppF = cpp & "F"
+
+  # Field<T> wrapper type and constructor strings
+  let sp  = "Field<" & cpp & ">"
+  let spD = "Field<" & cppD & ">"
+  let spF = "Field<" & cppF & ">"
+  let newCpp  = "Field<" & cpp & ">(@)"
+  let newCppD = "Field<" & cppD & ">(@)"
+  let newCppF = "Field<" & cppF & ">(@)"
+  let cloneCpp  = "Field<" & cpp & ">(gd(#))"
+  let cloneCppD = "Field<" & cppD & ">(gd(#))"
+  let cloneCppF = "Field<" & cppF & ">(gd(#))"
+  let gfh = "field.h"
+
   let scalarName  = ident(($name).replace("Lattice", "Scalar"))
   let scalarNameD = ident(($name).replace("Lattice", "Scalar") & "D")
   let scalarNameF = ident(($name).replace("Lattice", "Scalar") & "F")
@@ -96,9 +117,9 @@ macro newFieldType*(name: untyped): untyped =
 
   result = quote do:
     type 
-      `name`* {.importcpp: `cpp`, grid.} = object
-      `nameD`* {.importcpp: `cppD`, grid.} = object
-      `nameF`* {.importcpp: `cppF`, grid.} = object
+      `name`* {.importcpp: `sp`, header: `gfh`.} = object
+      `nameD`* {.importcpp: `spD`, header: `gfh`.} = object
+      `nameF`* {.importcpp: `spF`, header: `gfh`.} = object
     
     type
       `scalarName`* {.importcpp: `cppScalar`, grid, bycopy.} = object
@@ -107,11 +128,11 @@ macro newFieldType*(name: untyped): untyped =
 
     # new field constructors
     proc `newName`(g: ptr Grid): `name`
-      {.importcpp: `cpp` & "(@)", grid, constructor.}
+      {.importcpp: `newCpp`, grid, constructor.}
     proc `newNameD`(g: ptr Grid): `nameD`
-      {.importcpp: `cppD` & "(@)", grid, constructor.}
+      {.importcpp: `newCppD`, grid, constructor.}
     proc `newNameF`(g: ptr Grid): `nameF`
-      {.importcpp: `cppF` & "(@)", grid, constructor.}
+      {.importcpp: `newCppF`, grid, constructor.}
 
     # convenience overloads for var Grid
     template `newName`*(g: var Grid): `name` = `newName`(addr g)
@@ -119,9 +140,9 @@ macro newFieldType*(name: untyped): untyped =
     template `newNameF`*(g: var Grid): `nameF` = `newNameF`(addr g)
     
     # x.Grid() wrapper, preventing name conflict
-    proc base*(field: var `name`): ptr Base {.importcpp: "#.Grid()", grid.}
-    proc base*(field: var `nameD`): ptr Base {.importcpp: "#.Grid()", grid.}
-    proc base*(field: var `nameF`): ptr Base {.importcpp: "#.Grid()", grid.}
+    proc base*(field: var `name`): ptr Base {.importcpp: "gd(#).Grid()", grid.}
+    proc base*(field: var `nameD`): ptr Base {.importcpp: "gd(#).Grid()", grid.}
+    proc base*(field: var `nameF`): ptr Base {.importcpp: "gd(#).Grid()", grid.}
   
     template cartesian*(field: var `name`): ptr Cartesian =
       cast[ptr Cartesian](field.base())
@@ -132,40 +153,40 @@ macro newFieldType*(name: untyped): untyped =
 
     # checkerboard getter
     proc `cbGetter`*(field: var `name`): cint 
-      {.importcpp: "#.Checkerboard()", grid.}
+      {.importcpp: "gd(#).Checkerboard()", grid.}
     proc `cbGetter`*(field: var `nameD`): cint 
-      {.importcpp: "#.Checkerboard()", grid.}
+      {.importcpp: "gd(#).Checkerboard()", grid.}
     proc `cbGetter`*(field: var `nameF`): cint 
-      {.importcpp: "#.Checkerboard()", grid.}
+      {.importcpp: "gd(#).Checkerboard()", grid.}
     proc `cbGetter`*(field: `name`): cint 
-      {.importcpp: "#.Checkerboard()", grid.}
+      {.importcpp: "gd(#).Checkerboard()", grid.}
     proc `cbGetter`*(field: `nameD`): cint 
-      {.importcpp: "#.Checkerboard()", grid.}
+      {.importcpp: "gd(#).Checkerboard()", grid.}
     proc `cbGetter`*(field: `nameF`): cint 
-      {.importcpp: "#.Checkerboard()", grid.}
+      {.importcpp: "gd(#).Checkerboard()", grid.}
 
     # checkerboard setter (Checkerboard() returns int& in Grid)
     proc `cbSetter`*(field: var `name`; cb: cint) 
-      {.importcpp: "#.Checkerboard() = #", grid.}
+      {.importcpp: "gd(#).Checkerboard() = #", grid.}
     proc `cbSetter`*(field: var `nameD`; cb: cint) 
-      {.importcpp: "#.Checkerboard() = #", grid.}
+      {.importcpp: "gd(#).Checkerboard() = #", grid.}
     proc `cbSetter`*(field: var `nameF`; cb: cint) 
-      {.importcpp: "#.Checkerboard() = #", grid.}
+      {.importcpp: "gd(#).Checkerboard() = #", grid.}
 
     # pick/set checkerboard (red-black decomposition)
     proc pickCheckerboard(cb: cint; half: var `name`; full: `name`)
-      {.importcpp: "Grid::pickCheckerboard(@)", grid.}
+      {.importcpp: "Grid::pickCheckerboard(#, gd(#), gd(#))", grid.}
     proc pickCheckerboard(cb: cint; half: var `nameD`; full: `nameD`)
-      {.importcpp: "Grid::pickCheckerboard(@)", grid.}
+      {.importcpp: "Grid::pickCheckerboard(#, gd(#), gd(#))", grid.}
     proc pickCheckerboard(cb: cint; half: var `nameF`; full: `nameF`)
-      {.importcpp: "Grid::pickCheckerboard(@)", grid.}
+      {.importcpp: "Grid::pickCheckerboard(#, gd(#), gd(#))", grid.}
 
     proc setCheckerboard(full: var `name`; half: `name`)
-      {.importcpp: "Grid::setCheckerboard(@)", grid.}
+      {.importcpp: "Grid::setCheckerboard(gd(#), gd(#))", grid.}
     proc setCheckerboard(full: var `nameD`; half: `nameD`)
-      {.importcpp: "Grid::setCheckerboard(@)", grid.}
+      {.importcpp: "Grid::setCheckerboard(gd(#), gd(#))", grid.}
     proc setCheckerboard(full: var `nameF`; half: `nameF`)
-      {.importcpp: "Grid::setCheckerboard(@)", grid.}
+      {.importcpp: "Grid::setCheckerboard(gd(#), gd(#))", grid.}
 
     # set even components of full to half
     template `evenSetter`*(full: var `name`; half: `name`) = 
@@ -207,19 +228,19 @@ macro newFieldType*(name: untyped): untyped =
 
     # halo exchange into padded layout
     proc expand*(cell: PaddedCell; src: `name`): `name` 
-      {.importcpp: "#.Exchange(#)", grid.}
+      {.importcpp: "#.Exchange(gd(#))", grid.}
     proc expand*(cell: PaddedCell; src: `nameD`): `nameD` 
-      {.importcpp: "#.Exchange(#)", grid.}
+      {.importcpp: "#.Exchange(gd(#))", grid.}
     proc expand*(cell: PaddedCell; src: `nameF`): `nameF` 
-      {.importcpp: "#.Exchange(#)", grid.}
+      {.importcpp: "#.Exchange(gd(#))", grid.}
     
     # extract from padded layout
     proc extract*(cell: PaddedCell; src: `name`): `name`
-      {.importcpp: "#.Extract(#)", grid.}
+      {.importcpp: "#.Extract(gd(#))", grid.}
     proc extract*(cell: PaddedCell; src: `nameD`): `nameD`
-      {.importcpp: "#.Extract(#)", grid.}
+      {.importcpp: "#.Extract(gd(#))", grid.}
     proc extract*(cell: PaddedCell; src: `nameF`): `nameF`
-      {.importcpp: "#.Extract(#)", grid.}
+      {.importcpp: "#.Extract(gd(#))", grid.}
     
     # halo exchange
     proc exchange*(cell: var PaddedCell; src: var `name`) = 
@@ -231,123 +252,123 @@ macro newFieldType*(name: untyped): untyped =
     
     # random uniform initialization
     proc random*(rng: var ParallelRNG; field: var `name`)
-      {.importcpp: "Grid::random(@)", grid.}
+      {.importcpp: "Grid::random(#, gd(#))", grid.}
     proc random*(rng: var ParallelRNG; field: var `nameD`)
-      {.importcpp: "Grid::random(@)", grid.}
+      {.importcpp: "Grid::random(#, gd(#))", grid.}
     proc random*(rng: var ParallelRNG; field: var `nameF`)
-      {.importcpp: "Grid::random(@)", grid.}
+      {.importcpp: "Grid::random(#, gd(#))", grid.}
 
     # random normal initialization
     proc gaussian*(rng: var ParallelRNG; field: var `name`)
-      {.importcpp: "Grid::gaussian(@)", grid.}
+      {.importcpp: "Grid::gaussian(#, gd(#))", grid.}
     proc gaussian*(rng: var ParallelRNG; field: var `nameD`)
-      {.importcpp: "Grid::gaussian(@)", grid.}
+      {.importcpp: "Grid::gaussian(#, gd(#))", grid.}
     proc gaussian*(rng: var ParallelRNG; field: var `nameF`)
-      {.importcpp: "Grid::gaussian(@)", grid.}
+      {.importcpp: "Grid::gaussian(#, gd(#))", grid.}
     
     # hot configuration
     proc hot*(rng: var ParallelRNG; field: var `name`)
-      {.importcpp: "Grid::SU<Grid::Nc>::HotConfiguration(@)", grid.}
+      {.importcpp: "Grid::SU<Grid::Nc>::HotConfiguration(#, gd(#))", grid.}
     proc hot*(rng: var ParallelRNG; field: var `nameD`)
-      {.importcpp: "Grid::SU<Grid::Nc>::HotConfiguration(@)", grid.}
+      {.importcpp: "Grid::SU<Grid::Nc>::HotConfiguration(#, gd(#))", grid.}
     proc hot*(rng: var ParallelRNG; field: var `nameF`)
-      {.importcpp: "Grid::SU<Grid::Nc>::HotConfiguration(@)", grid.}
+      {.importcpp: "Grid::SU<Grid::Nc>::HotConfiguration(#, gd(#))", grid.}
     
     # tepid configuration (same as gaussian)
     proc tepid*(rng: var ParallelRNG; field: var `name`)
-      {.importcpp: "Grid::SU<Grid::Nc>::TepidConfiguration(@)", grid.}
+      {.importcpp: "Grid::SU<Grid::Nc>::TepidConfiguration(#, gd(#))", grid.}
     proc tepid*(rng: var ParallelRNG; field: var `nameD`)
-      {.importcpp: "Grid::SU<Grid::Nc>::TepidConfiguration(@)", grid.}
+      {.importcpp: "Grid::SU<Grid::Nc>::TepidConfiguration(#, gd(#))", grid.}
     proc tepid*(rng: var ParallelRNG; field: var `nameF`)
-      {.importcpp: "Grid::SU<Grid::Nc>::TepidConfiguration(@)", grid.}
+      {.importcpp: "Grid::SU<Grid::Nc>::TepidConfiguration(#, gd(#))", grid.}
 
     # unit (cold) configuration
-    proc unit*(dst: var `name`) {.importcpp: "Grid::SU<Grid::Nc>::ColdConfiguration(@)", grid.}
-    proc unit*(dst: var `nameD`) {.importcpp: "Grid::SU<Grid::Nc>::ColdConfiguration(@)", grid.}
-    proc unit*(dst: var `nameF`) {.importcpp: "Grid::SU<Grid::Nc>::ColdConfiguration(@)", grid.}
+    proc unit*(dst: var `name`) {.importcpp: "Grid::SU<Grid::Nc>::ColdConfiguration(gd(#))", grid.}
+    proc unit*(dst: var `nameD`) {.importcpp: "Grid::SU<Grid::Nc>::ColdConfiguration(gd(#))", grid.}
+    proc unit*(dst: var `nameF`) {.importcpp: "Grid::SU<Grid::Nc>::ColdConfiguration(gd(#))", grid.}
 
     # explicit set to zero
-    proc zero*(dst: var `name`) {.importcpp: "# = Grid::Zero()", grid.}
-    proc zero*(dst: var `nameD`) {.importcpp: "# = Grid::Zero()", grid.}
-    proc zero*(dst: var `nameF`) {.importcpp: "# = Grid::Zero()", grid.}
+    proc zero*(dst: var `name`) {.importcpp: "gd(#) = Grid::Zero()", grid.}
+    proc zero*(dst: var `nameD`) {.importcpp: "gd(#) = Grid::Zero()", grid.}
+    proc zero*(dst: var `nameF`) {.importcpp: "gd(#) = Grid::Zero()", grid.}
 
     # cartesian shift
     proc cartesianShift*(src: `name`; dir, disp: int): `name`
-      {.importcpp: "Grid::Cshift(@)", grid.}
+      {.importcpp: "Grid::Cshift(gd(#), #, #)", grid.}
     proc cartesianShift*(src: `nameD`; dir, disp: int): `nameD`
-      {.importcpp: "Grid::Cshift(@)", grid.}
+      {.importcpp: "Grid::Cshift(gd(#), #, #)", grid.}
     proc cartesianShift*(src: `nameF`; dir, disp: int): `nameF`
-      {.importcpp: "Grid::Cshift(@)", grid.}
+      {.importcpp: "Grid::Cshift(gd(#), #, #)", grid.}
     
     # adjoint
-    proc adjoint*(src: `name`): `name` {.importcpp: "Grid::adj(@)", grid.}
-    proc adjoint*(src: `nameD`): `nameD` {.importcpp: "Grid::adj(@)", grid.}
-    proc adjoint*(src: `nameF`): `nameF` {.importcpp: "Grid::adj(@)", grid.}
+    proc adjoint*(src: `name`): `name` {.importcpp: "Grid::adj(gd(#))", grid.}
+    proc adjoint*(src: `nameD`): `nameD` {.importcpp: "Grid::adj(gd(#))", grid.}
+    proc adjoint*(src: `nameF`): `nameF` {.importcpp: "Grid::adj(gd(#))", grid.}
 
     # conjugate
-    proc conjugate*(src: `name`): `name` {.importcpp: "Grid::conjugate(@)", grid.}
-    proc conjugate*(src: `nameD`): `nameD` {.importcpp: "Grid::conjugate(@)", grid.}
-    proc conjugate*(src: `nameF`): `nameF` {.importcpp: "Grid::conjugate(@)", grid.}
+    proc conjugate*(src: `name`): `name` {.importcpp: "Grid::conjugate(gd(#))", grid.}
+    proc conjugate*(src: `nameD`): `nameD` {.importcpp: "Grid::conjugate(gd(#))", grid.}
+    proc conjugate*(src: `nameF`): `nameF` {.importcpp: "Grid::conjugate(gd(#))", grid.}
 
     # transpose 
-    proc transpose*(src: `name`): `name` {.importcpp: "Grid::transpose(@)", grid.}
-    proc transpose*(src: `nameD`): `nameD` {.importcpp: "Grid::transpose(@)", grid.}
-    proc transpose*(src: `nameF`): `nameF` {.importcpp: "Grid::transpose(@)", grid.}
+    proc transpose*(src: `name`): `name` {.importcpp: "Grid::transpose(gd(#))", grid.}
+    proc transpose*(src: `nameD`): `nameD` {.importcpp: "Grid::transpose(gd(#))", grid.}
+    proc transpose*(src: `nameF`): `nameF` {.importcpp: "Grid::transpose(gd(#))", grid.}
 
     # arithmetic: addition
-    proc `opAdd`*(a, b: `name`): `name` {.importcpp: "(# + #)", grid.}
-    proc `opAdd`*(a, b: `nameD`): `nameD` {.importcpp: "(# + #)", grid.}
-    proc `opAdd`*(a, b: `nameF`): `nameF` {.importcpp: "(# + #)", grid.}
+    proc `opAdd`*(a, b: `name`): `name` {.importcpp: "(gd(#) + gd(#))", grid.}
+    proc `opAdd`*(a, b: `nameD`): `nameD` {.importcpp: "(gd(#) + gd(#))", grid.}
+    proc `opAdd`*(a, b: `nameF`): `nameF` {.importcpp: "(gd(#) + gd(#))", grid.}
 
     # arithmetic: subtraction
-    proc `opSub`*(a, b: `name`): `name` {.importcpp: "(# - #)", grid.}
-    proc `opSub`*(a, b: `nameD`): `nameD` {.importcpp: "(# - #)", grid.}
-    proc `opSub`*(a, b: `nameF`): `nameF` {.importcpp: "(# - #)", grid.}
+    proc `opSub`*(a, b: `name`): `name` {.importcpp: "(gd(#) - gd(#))", grid.}
+    proc `opSub`*(a, b: `nameD`): `nameD` {.importcpp: "(gd(#) - gd(#))", grid.}
+    proc `opSub`*(a, b: `nameF`): `nameF` {.importcpp: "(gd(#) - gd(#))", grid.}
 
     # mixed scalar arithmetic: scalar * site, site * scalar
-    proc `opMul`*(a: float64; b: `name`): `name` {.importcpp: "(# * #)", grid.}
-    proc `opMul`*(a: `name`; b: float64): `name` {.importcpp: "(# * #)", grid.}
-    proc `opMul`*(a: float64; b: `nameD`): `nameD` {.importcpp: "(# * #)", grid.}
-    proc `opMul`*(a: `nameD`; b: float64): `nameD` {.importcpp: "(# * #)", grid.}
-    proc `opMul`*(a: float32; b: `nameF`): `nameF` {.importcpp: "(# * #)", grid.}
-    proc `opMul`*(a: `nameF`; b: float32): `nameF` {.importcpp: "(# * #)", grid.}
+    proc `opMul`*(a: float64; b: `name`): `name` {.importcpp: "(# * gd(#))", grid.}
+    proc `opMul`*(a: `name`; b: float64): `name` {.importcpp: "(gd(#) * #)", grid.}
+    proc `opMul`*(a: float64; b: `nameD`): `nameD` {.importcpp: "(# * gd(#))", grid.}
+    proc `opMul`*(a: `nameD`; b: float64): `nameD` {.importcpp: "(gd(#) * #)", grid.}
+    proc `opMul`*(a: float32; b: `nameF`): `nameF` {.importcpp: "(# * gd(#))", grid.}
+    proc `opMul`*(a: `nameF`; b: float32): `nameF` {.importcpp: "(gd(#) * #)", grid.}
 
     # mixed scalar arithmetic: scalar + site, site + scalar
-    proc `opAdd`*(a: float64; b: `name`): `name` {.importcpp: "(# + #)", grid.}
-    proc `opAdd`*(a: `name`; b: float64): `name` {.importcpp: "(# + #)", grid.}
-    proc `opAdd`*(a: float64; b: `nameD`): `nameD` {.importcpp: "(# + #)", grid.}
-    proc `opAdd`*(a: `nameD`; b: float64): `nameD` {.importcpp: "(# + #)", grid.}
-    proc `opAdd`*(a: float32; b: `nameF`): `nameF` {.importcpp: "(# + #)", grid.}
-    proc `opAdd`*(a: `nameF`; b: float32): `nameF` {.importcpp: "(# + #)", grid.}
+    proc `opAdd`*(a: float64; b: `name`): `name` {.importcpp: "(# + gd(#))", grid.}
+    proc `opAdd`*(a: `name`; b: float64): `name` {.importcpp: "(gd(#) + #)", grid.}
+    proc `opAdd`*(a: float64; b: `nameD`): `nameD` {.importcpp: "(# + gd(#))", grid.}
+    proc `opAdd`*(a: `nameD`; b: float64): `nameD` {.importcpp: "(gd(#) + #)", grid.}
+    proc `opAdd`*(a: float32; b: `nameF`): `nameF` {.importcpp: "(# + gd(#))", grid.}
+    proc `opAdd`*(a: `nameF`; b: float32): `nameF` {.importcpp: "(gd(#) + #)", grid.}
 
     # mixed scalar arithmetic: site - scalar, scalar - site
-    proc `opSub`*(a: float64; b: `name`): `name` {.importcpp: "(# - #)", grid.}
-    proc `opSub`*(a: `name`; b: float64): `name` {.importcpp: "(# - #)", grid.}
-    proc `opSub`*(a: float64; b: `nameD`): `nameD` {.importcpp: "(# - #)", grid.}
-    proc `opSub`*(a: `nameD`; b: float64): `nameD` {.importcpp: "(# - #)", grid.}
-    proc `opSub`*(a: float32; b: `nameF`): `nameF` {.importcpp: "(# - #)", grid.}
-    proc `opSub`*(a: `nameF`; b: float32): `nameF` {.importcpp: "(# - #)", grid.}
+    proc `opSub`*(a: float64; b: `name`): `name` {.importcpp: "(# - gd(#))", grid.}
+    proc `opSub`*(a: `name`; b: float64): `name` {.importcpp: "(gd(#) - #)", grid.}
+    proc `opSub`*(a: float64; b: `nameD`): `nameD` {.importcpp: "(# - gd(#))", grid.}
+    proc `opSub`*(a: `nameD`; b: float64): `nameD` {.importcpp: "(gd(#) - #)", grid.}
+    proc `opSub`*(a: float32; b: `nameF`): `nameF` {.importcpp: "(# - gd(#))", grid.}
+    proc `opSub`*(a: `nameF`; b: float32): `nameF` {.importcpp: "(gd(#) - #)", grid.}
 
     # arithmetic: unary negation
-    proc `opSub`*(a: `name`): `name` {.importcpp: "(-#)", grid.}
-    proc `opSub`*(a: `nameD`): `nameD` {.importcpp: "(-#)", grid.}
-    proc `opSub`*(a: `nameF`): `nameF` {.importcpp: "(-#)", grid.}
+    proc `opSub`*(a: `name`): `name` {.importcpp: "(-gd(#))", grid.}
+    proc `opSub`*(a: `nameD`): `nameD` {.importcpp: "(-gd(#))", grid.}
+    proc `opSub`*(a: `nameF`): `nameF` {.importcpp: "(-gd(#))", grid.}
 
     # compound assignment
-    proc `opAddEq`*(a: var `name`; b: `name`) {.importcpp: "# += #", grid.}
-    proc `opAddEq`*(a: var `nameD`; b: `nameD`) {.importcpp: "# += #", grid.}
-    proc `opAddEq`*(a: var `nameF`; b: `nameF`) {.importcpp: "# += #", grid.}
-    proc `opSubEq`*(a: var `name`; b: `name`) {.importcpp: "# -= #", grid.}
-    proc `opSubEq`*(a: var `nameD`; b: `nameD`) {.importcpp: "# -= #", grid.}
-    proc `opSubEq`*(a: var `nameF`; b: `nameF`) {.importcpp: "# -= #", grid.}
-    proc `opMulEq`*(a: var `name`; b: `name`) {.importcpp: "# *= #", grid.}
-    proc `opMulEq`*(a: var `nameD`; b: `nameD`) {.importcpp: "# *= #", grid.}
-    proc `opMulEq`*(a: var `nameF`; b: `nameF`) {.importcpp: "# *= #", grid.}
+    proc `opAddEq`*(a: var `name`; b: `name`) {.importcpp: "gd(#) += gd(#)", grid.}
+    proc `opAddEq`*(a: var `nameD`; b: `nameD`) {.importcpp: "gd(#) += gd(#)", grid.}
+    proc `opAddEq`*(a: var `nameF`; b: `nameF`) {.importcpp: "gd(#) += gd(#)", grid.}
+    proc `opSubEq`*(a: var `name`; b: `name`) {.importcpp: "gd(#) -= gd(#)", grid.}
+    proc `opSubEq`*(a: var `nameD`; b: `nameD`) {.importcpp: "gd(#) -= gd(#)", grid.}
+    proc `opSubEq`*(a: var `nameF`; b: `nameF`) {.importcpp: "gd(#) -= gd(#)", grid.}
+    proc `opMulEq`*(a: var `name`; b: `name`) {.importcpp: "gd(#) *= gd(#)", grid.}
+    proc `opMulEq`*(a: var `nameD`; b: `nameD`) {.importcpp: "gd(#) *= gd(#)", grid.}
+    proc `opMulEq`*(a: var `nameF`; b: `nameF`) {.importcpp: "gd(#) *= gd(#)", grid.}
 
     # global lattice reduction: returns scalar_object
-    proc reduce*(src: `name`): `scalarName` {.importcpp: "Grid::sum(@)", grid.}
-    proc reduce*(src: `nameD`): `scalarNameD` {.importcpp: "Grid::sum(@)", grid.}
-    proc reduce*(src: `nameF`): `scalarNameF` {.importcpp: "Grid::sum(@)", grid.}
+    proc reduce*(src: `name`): `scalarName` {.importcpp: "Grid::sum(gd(#))", grid.}
+    proc reduce*(src: `nameD`): `scalarNameD` {.importcpp: "Grid::sum(gd(#))", grid.}
+    proc reduce*(src: `nameF`): `scalarNameF` {.importcpp: "Grid::sum(gd(#))", grid.}
 
 newFieldType(LatticeInteger)
 
@@ -453,18 +474,18 @@ template newFermionField*(grid: var Grid): untyped =
 #[ gauge accessors ]#
 
 proc peekLorentz(src: LatticeGaugeField; mu: cint): LatticeColorMatrix
-  {.importcpp: "Grid::PeekIndex<0>(@)", grid.}
+  {.importcpp: "Grid::PeekIndex<0>(gd(#), #)", grid.}
 proc peekLorentz(src: LatticeGaugeFieldD; mu: cint): LatticeColorMatrixD
-  {.importcpp: "Grid::PeekIndex<0>(@)", grid.}
+  {.importcpp: "Grid::PeekIndex<0>(gd(#), #)", grid.}
 proc peekLorentz(src: LatticeGaugeFieldF; mu: cint): LatticeColorMatrixF
-  {.importcpp: "Grid::PeekIndex<0>(@)", grid.}
+  {.importcpp: "Grid::PeekIndex<0>(gd(#), #)", grid.}
 
 proc pokeLorentz(dst: var LatticeGaugeField; src: LatticeColorMatrix; mu: cint)
-  {.importcpp: "Grid::PokeIndex<0>(@)", grid.}
+  {.importcpp: "Grid::PokeIndex<0>(gd(#), gd(#), #)", grid.}
 proc pokeLorentz(dst: var LatticeGaugeFieldD; src: LatticeColorMatrixD; mu: cint)
-  {.importcpp: "Grid::PokeIndex<0>(@)", grid.}
+  {.importcpp: "Grid::PokeIndex<0>(gd(#), gd(#), #)", grid.}
 proc pokeLorentz(dst: var LatticeGaugeFieldF; src: LatticeColorMatrixF; mu: cint)
-  {.importcpp: "Grid::PokeIndex<0>(@)", grid.}
+  {.importcpp: "Grid::PokeIndex<0>(gd(#), gd(#), #)", grid.}
 
 template `[]`*(u: GaugeField; mu: int): untyped = peekLorentz(u, cint(mu))
 
@@ -472,18 +493,18 @@ template `[]=`*(u: var GaugeField; mu: int; src: GaugeLinkField): untyped =
   pokeLorentz(u, src, cint(mu))
 
 proc peekColor(src: LatticeColorMatrix; i,j: cint): LatticeComplex
-  {.importcpp: "Grid::PeekIndex<2>(@)", grid.}
+  {.importcpp: "Grid::PeekIndex<2>(gd(#), #, #)", grid.}
 proc peekColor(src: LatticeColorMatrixD; i,j: cint): LatticeComplexD
-  {.importcpp: "Grid::PeekIndex<2>(@)", grid.}
+  {.importcpp: "Grid::PeekIndex<2>(gd(#), #, #)", grid.}
 proc peekColor(src: LatticeColorMatrixF; i,j: cint): LatticeComplexF
-  {.importcpp: "Grid::PeekIndex<2>(@)", grid.}
+  {.importcpp: "Grid::PeekIndex<2>(gd(#), #, #)", grid.}
   
 proc pokeColor(dst: var LatticeColorMatrix; src: LatticeComplex; i,j: cint)
-  {.importcpp: "Grid::PokeIndex<2>(@)", grid.}
+  {.importcpp: "Grid::PokeIndex<2>(gd(#), gd(#), #, #)", grid.}
 proc pokeColor(dst: var LatticeColorMatrixD; src: LatticeComplexD; i,j: cint)
-  {.importcpp: "Grid::PokeIndex<2>(@)", grid.}
+  {.importcpp: "Grid::PokeIndex<2>(gd(#), gd(#), #, #)", grid.}
 proc pokeColor(dst: var LatticeColorMatrixF; src: LatticeComplexF; i,j: cint)
-  {.importcpp: "Grid::PokeIndex<2>(@)", grid.}
+  {.importcpp: "Grid::PokeIndex<2>(gd(#), gd(#), #, #)", grid.}
 
 template `[]`*(u: GaugeLinkField; i,j: int): untyped = peekColor(u, cint(i), cint(j))
 
@@ -491,18 +512,18 @@ template `[]=`*(u: var GaugeLinkField; src: LatticeComplex; i,j: int): untyped =
   pokeColor(u, src, cint(i), cint(j))
 
 proc peekSpin(src: LatticeSpinColorVector; i: cint): LatticeColorVector
-  {.importcpp: "Grid::PeekIndex<1>(@)", grid.}
+  {.importcpp: "Grid::PeekIndex<1>(gd(#), #)", grid.}
 proc peekSpin(src: LatticeSpinColorVectorD; i: cint): LatticeColorVectorD
-  {.importcpp: "Grid::PeekIndex<1>(@)", grid.}
+  {.importcpp: "Grid::PeekIndex<1>(gd(#), #)", grid.}
 proc peekSpin(src: LatticeSpinColorVectorF; i: cint): LatticeColorVectorF
-  {.importcpp: "Grid::PeekIndex<1>(@)", grid.}
+  {.importcpp: "Grid::PeekIndex<1>(gd(#), #)", grid.}
 
 proc pokeSpin(dst: var LatticeSpinColorVector; src: LatticeColorVector; i: cint)
-  {.importcpp: "Grid::PokeIndex<1>(@)", grid.}
+  {.importcpp: "Grid::PokeIndex<1>(gd(#), gd(#), #)", grid.}
 proc pokeSpin (dst: var LatticeSpinColorVectorD; src: LatticeColorVectorD; i: cint)
-  {.importcpp: "Grid::PokeIndex<1>(@)", grid.}
+  {.importcpp: "Grid::PokeIndex<1>(gd(#), gd(#), #)", grid.}
 proc pokeSpin(dst: var LatticeSpinColorVectorF; src: LatticeColorVectorF; i: cint)
-  {.importcpp: "Grid::PokeIndex<1>(@)", grid.}
+  {.importcpp: "Grid::PokeIndex<1>(gd(#), gd(#), #)", grid.}
 
 template `[]`*(u: FermionField; i: int): untyped = peekSpin(u, cint(i))
 
@@ -512,11 +533,11 @@ template `[]=`*(u: var FermionField; i: int; src: BosonField): untyped =
 #[ misc gauge operations ]#
 
 proc trace*(src: LatticeColorMatrix): LatticeComplex
-  {.importcpp: "Grid::trace(@)", grid.}
+  {.importcpp: "Grid::trace(gd(#))", grid.}
 proc trace*(src: LatticeColorMatrixD): LatticeComplexD
-  {.importcpp: "Grid::trace(@)", grid.}
+  {.importcpp: "Grid::trace(gd(#))", grid.}
 proc trace*(src: LatticeColorMatrixF): LatticeComplexF
-  {.importcpp: "Grid::trace(@)", grid.} 
+  {.importcpp: "Grid::trace(gd(#))", grid.} 
 
 template trace*(src: GaugeField): untyped =
   ## Returns a tuple of per-Lorentz-component traces.
@@ -534,21 +555,21 @@ template trace*(src: GaugeField): untyped =
     {.error: "trace(GaugeField) not implemented for nd > 5".}
 
 proc tracelessAntihermitianProjection*(src: LatticeColorMatrix): LatticeColorMatrix
-  {.importcpp: "Grid::Ta(@)", grid.}
+  {.importcpp: "Grid::Ta(gd(#))", grid.}
 proc tracelessAntihermitianProjection*(src: LatticeColorMatrixD): LatticeColorMatrixD
-  {.importcpp: "Grid::Ta(@)", grid.}
+  {.importcpp: "Grid::Ta(gd(#))", grid.}
 proc tracelessAntihermitianProjection*(src: LatticeColorMatrixF): LatticeColorMatrixF
-  {.importcpp: "Grid::Ta(@)", grid.}
+  {.importcpp: "Grid::Ta(gd(#))", grid.}
 
 proc tracelessAntihermitianProjection*(src: LatticeGaugeField): LatticeGaugeField
-  {.importcpp: "Grid::Ta(@)", grid.}
+  {.importcpp: "Grid::Ta(gd(#))", grid.}
 proc tracelessAntihermitianProjection*(src: LatticeGaugeFieldD): LatticeGaugeFieldD
-  {.importcpp: "Grid::Ta(@)", grid.}
+  {.importcpp: "Grid::Ta(gd(#))", grid.}
 proc tracelessAntihermitianProjection*(src: LatticeGaugeFieldF): LatticeGaugeFieldF
-  {.importcpp: "Grid::Ta(@)", grid.}
+  {.importcpp: "Grid::Ta(gd(#))", grid.}
 
 proc reorthogonalize*(field: var GaugeLinkField) 
-  {.importcpp: "Grid::ProjectOnGroup(@)", grid.}
+  {.importcpp: "Grid::ProjectOnGroup(gd(#))", grid.}
 
 proc reorthogonalize*(field: var GaugeField) =
   ## Reorthogonalize all Lorentz components of a gauge field.
@@ -558,11 +579,11 @@ proc reorthogonalize*(field: var GaugeField) =
     field[mu] = fmu
 
 proc randomLieAlgebra*(rng: var ParallelRNG; field: var LatticeColorMatrix; scale: float64 = 1.0)
-  {.importcpp: "Grid::SU<Grid::Nc>::GaussianFundamentalLieAlgebraMatrix(#, #, #)", grid.}
+  {.importcpp: "Grid::SU<Grid::Nc>::GaussianFundamentalLieAlgebraMatrix(#, gd(#), #)", grid.}
 proc randomLieAlgebra*(rng: var ParallelRNG; field: var LatticeColorMatrixD; scale: float64 = 1.0)
-  {.importcpp: "Grid::SU<Grid::Nc>::GaussianFundamentalLieAlgebraMatrix(#, #, #)", grid.}
+  {.importcpp: "Grid::SU<Grid::Nc>::GaussianFundamentalLieAlgebraMatrix(#, gd(#), #)", grid.}
 proc randomLieAlgebra*(rng: var ParallelRNG; field: var LatticeColorMatrixF; scale: float64 = 1.0)
-  {.importcpp: "Grid::SU<Grid::Nc>::GaussianFundamentalLieAlgebraMatrix(#, #, #)", grid.}
+  {.importcpp: "Grid::SU<Grid::Nc>::GaussianFundamentalLieAlgebraMatrix(#, gd(#), #)", grid.}
 
 proc randomLieAlgebra*(rng: var ParallelRNG; field: var GaugeField; scale: float64 = 1.0) =
   for mu in 0..<nd:
@@ -571,61 +592,61 @@ proc randomLieAlgebra*(rng: var ParallelRNG; field: var GaugeField; scale: float
     field[mu] = fieldmu
 
 proc exponential*(field: LatticeColorMatrix; alpha: float64 = 1.0; nexp: int = 12): LatticeColorMatrix
-  {.importcpp: "Grid::expMat(#, #, #)", grid.}
+  {.importcpp: "Grid::expMat(gd(#), #, #)", grid.}
 proc exponential*(field: LatticeColorMatrixD; alpha: float64 = 1.0; nexp: int = 12): LatticeColorMatrixD
-  {.importcpp: "Grid::expMat(#, #, #)", grid.}
+  {.importcpp: "Grid::expMat(gd(#), #, #)", grid.}
 proc exponential*(field: LatticeColorMatrixF; alpha: float64 = 1.0; nexp: int = 12): LatticeColorMatrixF
-  {.importcpp: "Grid::expMat(#, #, #)", grid.}
+  {.importcpp: "Grid::expMat(gd(#), #, #)", grid.}
 
 proc determinant*(src: LatticeColorMatrix): LatticeComplex
-  {.importcpp: "Grid::Determinant(@)", grid.}
+  {.importcpp: "Grid::Determinant(gd(#))", grid.}
 proc determinant*(src: LatticeColorMatrixD): LatticeComplexD
-  {.importcpp: "Grid::Determinant(@)", grid.}
+  {.importcpp: "Grid::Determinant(gd(#))", grid.}
 proc determinant*(src: LatticeColorMatrixF): LatticeComplexF
-  {.importcpp: "Grid::Determinant(@)", grid.}
+  {.importcpp: "Grid::Determinant(gd(#))", grid.}
 
 proc inverse*(src: LatticeColorMatrix): LatticeColorMatrix
-  {.importcpp: "Grid::Inverse(@)", grid.}
+  {.importcpp: "Grid::Inverse(gd(#))", grid.}
 proc inverse*(src: LatticeColorMatrixD): LatticeColorMatrixD
-  {.importcpp: "Grid::Inverse(@)", grid.}
+  {.importcpp: "Grid::Inverse(gd(#))", grid.}
 proc inverse*(src: LatticeColorMatrixF): LatticeColorMatrixF
-  {.importcpp: "Grid::Inverse(@)", grid.}
+  {.importcpp: "Grid::Inverse(gd(#))", grid.}
 
 proc `*`*(a, b: LatticeGaugeField): LatticeGaugeField
-  {.importcpp: "(#*#)", grid.}
+  {.importcpp: "(gd(#) * gd(#))", grid.}
 proc `*`*(a, b: LatticeGaugeFieldD): LatticeGaugeFieldD
-  {.importcpp: "(#*#)", grid.}
+  {.importcpp: "(gd(#) * gd(#))", grid.}
 proc `*`*(a, b: LatticeGaugeFieldF): LatticeGaugeFieldF
-  {.importcpp: "(#*#)", grid.}
+  {.importcpp: "(gd(#) * gd(#))", grid.}
 
 proc `*`*(a, b: LatticeColorMatrix): LatticeColorMatrix
-  {.importcpp: "(#*#)", grid.}
+  {.importcpp: "(gd(#) * gd(#))", grid.}
 proc `*`*(a, b: LatticeColorMatrixD): LatticeColorMatrixD
-  {.importcpp: "(#*#)", grid.}
+  {.importcpp: "(gd(#) * gd(#))", grid.}
 proc `*`*(a, b: LatticeColorMatrixF): LatticeColorMatrixF
-  {.importcpp: "(#*#)", grid.}
+  {.importcpp: "(gd(#) * gd(#))", grid.}
 
 proc `*`*(a: LatticeComplex; b: LatticeGaugeField): LatticeGaugeField
-  {.importcpp: "(#*#)", grid.}
+  {.importcpp: "(gd(#) * gd(#))", grid.}
 proc `*`*(a: LatticeComplexD; b: LatticeGaugeFieldD): LatticeGaugeFieldD
-  {.importcpp: "(#*#)", grid.}
+  {.importcpp: "(gd(#) * gd(#))", grid.}
 proc `*`*(a: LatticeComplexF; b: LatticeGaugeFieldF): LatticeGaugeFieldF
-  {.importcpp: "(#*#)", grid.}
+  {.importcpp: "(gd(#) * gd(#))", grid.}
 
 proc `*`*(a: LatticeComplex; b: LatticeColorMatrix): LatticeColorMatrix
-  {.importcpp: "(#*#)", grid.}
+  {.importcpp: "(gd(#) * gd(#))", grid.}
 proc `*`*(a: LatticeComplexD; b: LatticeColorMatrixD): LatticeColorMatrixD
-  {.importcpp: "(#*#)", grid.}
+  {.importcpp: "(gd(#) * gd(#))", grid.}
 proc `*`*(a: LatticeComplexF; b: LatticeColorMatrixF): LatticeColorMatrixF
-  {.importcpp: "(#*#)", grid.}
+  {.importcpp: "(gd(#) * gd(#))", grid.}
 
 #[ misc vector operations ]#
 
 proc fermToProp(target: var PropagatorField; source: FermionField, c,s: cint)
-  {.importcpp: "Grid::FermToProp(@)", grid.}
+  {.importcpp: "Grid::FermToProp(gd(#), gd(#), #, #)", grid.}
 
 proc propToFerm(target: var FermionField; source: PropagatorField, c,s: cint)
-  {.importcpp: "Grid::PropToFerm(@)", grid.}
+  {.importcpp: "Grid::PropToFerm(gd(#), gd(#), #, #)", grid.}
 
 proc `[]=`*(target: var PropagatorField; c,s: int; source: FermionField) =
   fermToProp(target, source, cint(c), cint(s))
@@ -636,132 +657,132 @@ proc `[]=`*(target: var FermionField; c,s: int; source: PropagatorField) =
 #[ misc real/complex operations ]#
 
 proc sum*(src: LatticeInteger): int
-  {.importcpp: "Grid::TensorRemove(Grid::sum(@))", grid.}
+  {.importcpp: "Grid::TensorRemove(Grid::sum(gd(#)))", grid.}
 proc sum*(src: LatticeIntegerD): int
-  {.importcpp: "Grid::TensorRemove(Grid::sum(@))", grid.}
+  {.importcpp: "Grid::TensorRemove(Grid::sum(gd(#)))", grid.}
 proc sum*(src: LatticeIntegerF): int
-  {.importcpp: "Grid::TensorRemove(Grid::sum(@))", grid.}
+  {.importcpp: "Grid::TensorRemove(Grid::sum(gd(#)))", grid.}
 
 proc sum*(src: LatticeReal): float64
-  {.importcpp: "Grid::TensorRemove(Grid::sum(@))", grid.}
+  {.importcpp: "Grid::TensorRemove(Grid::sum(gd(#)))", grid.}
 proc sum*(src: LatticeRealD): float64
-  {.importcpp: "Grid::TensorRemove(Grid::sum(@))", grid.}
+  {.importcpp: "Grid::TensorRemove(Grid::sum(gd(#)))", grid.}
 proc sum*(src: LatticeRealF): float32
-  {.importcpp: "Grid::TensorRemove(Grid::sum(@))", grid.}
+  {.importcpp: "Grid::TensorRemove(Grid::sum(gd(#)))", grid.}
 
 proc sum*(src: LatticeComplex): ComplexD
-  {.importcpp: "Grid::TensorRemove(Grid::sum(@))", grid.}
+  {.importcpp: "Grid::TensorRemove(Grid::sum(gd(#)))", grid.}
 proc sum*(src: LatticeComplexD): ComplexD
-  {.importcpp: "Grid::TensorRemove(Grid::sum(@))", grid.}
+  {.importcpp: "Grid::TensorRemove(Grid::sum(gd(#)))", grid.}
 proc sum*(src: LatticeComplexF): ComplexF
-  {.importcpp: "Grid::TensorRemove(Grid::sum(@))", grid.}
+  {.importcpp: "Grid::TensorRemove(Grid::sum(gd(#)))", grid.}
 
 proc re*(src: LatticeComplex): LatticeComplex
-  {.importcpp: "Grid::real(@)", grid.}
+  {.importcpp: "Grid::real(gd(#))", grid.}
 proc re*(src: LatticeComplexD): LatticeComplexD
-  {.importcpp: "Grid::real(@)", grid.}
+  {.importcpp: "Grid::real(gd(#))", grid.}
 proc re*(src: LatticeComplexF): LatticeComplexF
-  {.importcpp: "Grid::real(@)", grid.}
+  {.importcpp: "Grid::real(gd(#))", grid.}
 
 proc im*(src: LatticeComplex): LatticeComplex
-  {.importcpp: "Grid::imag(@)", grid.}
+  {.importcpp: "Grid::imag(gd(#))", grid.}
 proc im*(src: LatticeComplexD): LatticeComplexD
-  {.importcpp: "Grid::imag(@)", grid.}
+  {.importcpp: "Grid::imag(gd(#))", grid.}
 proc im*(src: LatticeComplexF): LatticeComplexF
-  {.importcpp: "Grid::imag(@)", grid.}
+  {.importcpp: "Grid::imag(gd(#))", grid.}
 
 proc toReal*(src: LatticeComplex): LatticeReal
-  {.importcpp: "Grid::toReal(@)", grid.}
+  {.importcpp: "Grid::toReal(gd(#))", grid.}
 proc toReal*(src: LatticeComplexD): LatticeRealD
-  {.importcpp: "Grid::toReal(@)", grid.}
+  {.importcpp: "Grid::toReal(gd(#))", grid.}
 proc toReal*(src: LatticeComplexF): LatticeRealF
-  {.importcpp: "Grid::toReal(@)", grid.}
+  {.importcpp: "Grid::toReal(gd(#))", grid.}
 
 proc toComplex*(src: LatticeReal): LatticeComplex
-  {.importcpp: "Grid::toComplex(@)", grid.}
+  {.importcpp: "Grid::toComplex(gd(#))", grid.}
 proc toComplex*(src: LatticeRealD): LatticeComplexD
-  {.importcpp: "Grid::toComplex(@)", grid.}
+  {.importcpp: "Grid::toComplex(gd(#))", grid.}
 proc toComplex*(src: LatticeRealF): LatticeComplexF
-  {.importcpp: "Grid::toComplex(@)", grid.}
+  {.importcpp: "Grid::toComplex(gd(#))", grid.}
 
-proc `*`*(a, b: LatticeReal): LatticeReal {.importcpp: "(#*#)", grid.}
-proc `*`*(a, b: LatticeRealD): LatticeRealD {.importcpp: "(#*#)", grid.}
-proc `*`*(a, b: LatticeRealF): LatticeRealF {.importcpp: "(#*#)", grid.}
+proc `*`*(a, b: LatticeReal): LatticeReal {.importcpp: "(gd(#) * gd(#))", grid.}
+proc `*`*(a, b: LatticeRealD): LatticeRealD {.importcpp: "(gd(#) * gd(#))", grid.}
+proc `*`*(a, b: LatticeRealF): LatticeRealF {.importcpp: "(gd(#) * gd(#))", grid.}
 
-proc `*`*(a, b: LatticeComplex): LatticeComplex {.importcpp: "(#*#)", grid.}
-proc `*`*(a, b: LatticeComplexD): LatticeComplexD {.importcpp: "(#*#)", grid.}
-proc `*`*(a, b: LatticeComplexF): LatticeComplexF {.importcpp: "(#*#)", grid.}
+proc `*`*(a, b: LatticeComplex): LatticeComplex {.importcpp: "(gd(#) * gd(#))", grid.}
+proc `*`*(a, b: LatticeComplexD): LatticeComplexD {.importcpp: "(gd(#) * gd(#))", grid.}
+proc `*`*(a, b: LatticeComplexF): LatticeComplexF {.importcpp: "(gd(#) * gd(#))", grid.}
 
 proc `*`*(a: LatticeReal; b: LatticeComplex): LatticeComplex
-  {.importcpp: "(Grid::toComplex(#)*#)", grid.}
+  {.importcpp: "(Grid::toComplex(gd(#)) * gd(#))", grid.}
 proc `*`*(a: LatticeComplex; b: LatticeReal): LatticeComplex
-  {.importcpp: "(#*Grid::toComplex(#))", grid.}
+  {.importcpp: "(gd(#) * Grid::toComplex(gd(#)))", grid.}
 proc `*`*(a: LatticeRealD; b: LatticeComplexD): LatticeComplexD
-  {.importcpp: "(Grid::toComplex(#)*#)", grid.}
+  {.importcpp: "(Grid::toComplex(gd(#)) * gd(#))", grid.}
 proc `*`*(a: LatticeComplexD; b: LatticeRealD): LatticeComplexD
-  {.importcpp: "(#*Grid::toComplex(#))", grid.}
+  {.importcpp: "(gd(#) * Grid::toComplex(gd(#)))", grid.}
 proc `*`*(a: LatticeRealF; b: LatticeComplexF): LatticeComplexF
-  {.importcpp: "(Grid::toComplex(#)*#)", grid.}
+  {.importcpp: "(Grid::toComplex(gd(#)) * gd(#))", grid.}
 proc `*`*(a: LatticeComplexF; b: LatticeRealF): LatticeComplexF
-  {.importcpp: "(#*Grid::toComplex(#))", grid.}
+  {.importcpp: "(gd(#) * Grid::toComplex(gd(#)))", grid.}
 
 #[ misc operations ]#
 
-proc l2Norm2*(src: LatticeComplex | LatticeColorVector): float64
-  {.importcpp: "Grid::norm2(@)", grid.}
-proc l2Norm2*(src: LatticeComplexD | LatticeColorVectorD): float64
-  {.importcpp: "Grid::norm2(@)", grid.}
-proc l2Norm2*(src: LatticeComplexF | LatticeColorVectorF): float32
-  {.importcpp: "(float)Grid::norm2(@)", grid.}
+proc squareNorm2*(src: LatticeComplex | LatticeColorVector): float64
+  {.importcpp: "Grid::norm2(gd(#))", grid.}
+proc squareNorm2*(src: LatticeComplexD | LatticeColorVectorD): float64
+  {.importcpp: "Grid::norm2(gd(#))", grid.}
+proc squareNorm2*(src: LatticeComplexF | LatticeColorVectorF): float32
+  {.importcpp: "(float)Grid::norm2(gd(#))", grid.}
 
 proc traceNorm2*(src: LatticeColorMatrix): float64
-  {.importcpp: "Grid::norm2(@)", grid.}
+  {.importcpp: "Grid::norm2(gd(#))", grid.}
 proc traceNorm2*(src: LatticeColorMatrixD): float64
-  {.importcpp: "Grid::norm2(@)", grid.}
+  {.importcpp: "Grid::norm2(gd(#))", grid.}
 proc traceNorm2*(src: LatticeColorMatrixF): float32
-  {.importcpp: "(float)Grid::norm2(@)", grid.}
+  {.importcpp: "(float)Grid::norm2(gd(#))", grid.}
 
 proc traceNorm2*(src: GaugeField): float64 =
   ## Returns the sum of traceNorm2 over Lorentz components.
   var sum: float64 = 0.0
   for mu in 0 ..< nd:
     sum += traceNorm2(src[mu])
-  sum
+  return sum
 
 proc `><`*(a, b: LatticeColorVector): LatticeColorMatrix
-  {.importcpp: "Grid::outerProduct(@)", grid.}
+  {.importcpp: "Grid::outerProduct(gd(#), gd(#))", grid.}
 proc `><`*(a, b: LatticeColorVectorD): LatticeColorMatrixD
-  {.importcpp: "Grid::outerProduct(@)", grid.}
+  {.importcpp: "Grid::outerProduct(gd(#), gd(#))", grid.}
 proc `><`*(a, b: LatticeColorVectorF): LatticeColorMatrixF
-  {.importcpp: "Grid::outerProduct(@)", grid.}
+  {.importcpp: "Grid::outerProduct(gd(#), gd(#))", grid.}
 
 proc `*`*(a, b: LatticeColorVector): LatticeComplex
-  {.importcpp: "Grid::localInnerProduct(@)", grid.}
+  {.importcpp: "Grid::localInnerProduct(gd(#), gd(#))", grid.}
 proc `*`*(a, b: LatticeColorVectorD): LatticeComplexD
-  {.importcpp: "Grid::localInnerProduct(@)", grid.}
+  {.importcpp: "Grid::localInnerProduct(gd(#), gd(#))", grid.}
 proc `*`*(a, b: LatticeColorVectorF): LatticeComplexF
-  {.importcpp: "Grid::localInnerProduct(@)", grid.}
+  {.importcpp: "Grid::localInnerProduct(gd(#), gd(#))", grid.}
   
 proc `*.`*(a, b: LatticeColorVector): LatticeComplex
-  {.importcpp: "Grid::localInnerProduct(@)", grid.}
+  {.importcpp: "Grid::localInnerProduct(gd(#), gd(#))", grid.}
 proc `*.`*(a, b: LatticeColorVectorD): LatticeComplexD
-  {.importcpp: "Grid::localInnerProduct(@)", grid.}
+  {.importcpp: "Grid::localInnerProduct(gd(#), gd(#))", grid.}
 proc `*.`*(a, b: LatticeColorVectorF): LatticeComplexF
-  {.importcpp: "Grid::localInnerProduct(@)", grid.}
+  {.importcpp: "Grid::localInnerProduct(gd(#), gd(#))", grid.}
 
 proc `*`*(a: LatticeReal; b: LatticeColorVector): LatticeColorVector
-  {.importcpp: "(Grid::toComplex(#)*#)", grid.}
+  {.importcpp: "(Grid::toComplex(gd(#)) * gd(#))", grid.}
 proc `*`*(a: LatticeRealD; b: LatticeColorVectorD): LatticeColorVectorD
-  {.importcpp: "(Grid::toComplex(#)*#)", grid.}
+  {.importcpp: "(Grid::toComplex(gd(#)) * gd(#))", grid.}
 proc `*`*(a: LatticeRealF; b: LatticeColorVectorF): LatticeColorVectorF
-  {.importcpp: "(Grid::toComplex(#)*#)", grid.} 
+  {.importcpp: "(Grid::toComplex(gd(#)) * gd(#))", grid.} 
 
 proc `*`*(a: LatticeComplex; b: LatticeColorVector): LatticeColorVector
-  {.importcpp: "(#*#)", grid.}
+  {.importcpp: "(gd(#) * gd(#))", grid.}
 proc `*`*(a: LatticeComplexD; b: LatticeColorVectorD): LatticeColorVectorD
-  {.importcpp: "(#*#)", grid.}
+  {.importcpp: "(gd(#) * gd(#))", grid.}
 proc `*`*(a: LatticeComplexF; b: LatticeColorVectorF): LatticeColorVectorF
-  {.importcpp: "(#*#)", grid.}
+  {.importcpp: "(gd(#) * gd(#))", grid.}
 
 #[ tests ]#
 
@@ -1063,12 +1084,12 @@ when isMainModule:
     test "norm2 of zero field is zero":
       var c = grid.newComplexField()
       zero(c)
-      assert l2Norm2(c) ~= 0.0
+      assert squareNorm2(c) ~= 0.0
 
     test "norm2 of nonzero field is positive":
       var c = grid.newComplexField()
       rng.gaussian(c)
-      assert l2Norm2(c) > 0.0
+      assert squareNorm2(c) > 0.0
 
     test "traceNorm2 of unit link":
       var gf = grid.newGaugeField()

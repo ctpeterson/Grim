@@ -29,7 +29,8 @@
 import cpp
 import grid
 
-import types/[field, rng]
+import types/[field]
+import types/[rng]
 
 header()
 
@@ -87,7 +88,7 @@ proc close*(r: var LimeReader)
   {.importcpp: "#.close()", grid.}
 
 proc readConfigurationImpl(r: var LimeReader; field: var Field; recordName: cstring)
-  {.importcpp: "#.readLimeLatticeBinaryObject(#, std::string(#))", grid.}
+  {.importcpp: "#.readLimeLatticeBinaryObject(gd(#), std::string(#))", grid.}
 
 proc readConfiguration*(
   r: var LimeReader; 
@@ -95,9 +96,9 @@ proc readConfiguration*(
   recordName: string = scidacBinaryData
 ) = r.readConfigurationImpl(field, recordName.cstring)
 
-proc readConfiguration*(field: var Field; filename: string) =
+proc readLimeConfiguration*(field: var Field; filename: string) =
   var reader = newLimeReader()
-  reader.read(filename.cstring):
+  reader.read(filename):
     reader.readConfiguration(field)
 
 proc readObjectImpl(
@@ -129,7 +130,7 @@ proc close*(w: var LimeWriter)
   {.importcpp: "#.close()", grid.}
 
 proc writeConfigurationImpl(w: var LimeWriter; field: var Field; recordName: cstring)
-  {.importcpp: "#.writeLimeLatticeBinaryObject(#, std::string(#))", grid.}
+  {.importcpp: "#.writeLimeLatticeBinaryObject(gd(#), std::string(#))", grid.}
 
 proc writeConfiguration*(
   w: var LimeWriter; 
@@ -137,12 +138,14 @@ proc writeConfiguration*(
   recordName: string = scidacBinaryData
 ) = w.writeConfigurationImpl(field, recordName.cstring)
 
-proc writeConfiguration*(
+proc writeLimeConfiguration*(
   field: var Field;
+  filename: string;
   recordName: string = scidacBinaryData
 ) =
   var writer = newLimeWriterImpl(field.cartesian().isBoss())
-  writer.writeConfiguration(field, recordName)
+  writer.write(filename):
+    writer.writeConfiguration(field, recordName)
 
 proc writeObjectImpl(
   w: var LimeWriter; 
@@ -248,7 +251,7 @@ proc close*(r: var SciDACReader)
   {.importcpp: "#.close()", grid.}
 
 proc readScidacFieldRecord*(r: var SciDACReader; field: var Field; record: var Record) 
-  {.importcpp: "#.readScidacFieldRecord(#, #)", grid.}
+  {.importcpp: "#.readScidacFieldRecord(gd(#), #)", grid.}
 
 proc readScidacFieldRecord*(r: var SciDACReader; field: var Field) =
   var record = newRecord()
@@ -272,7 +275,7 @@ proc close*(w: var SciDACWriter)
   {.importcpp: "#.close()", grid.}
 
 proc writeScidacFieldRecord*(w: var SciDACWriter; field: var Field; record: Record) 
-  {.importcpp: "#.writeScidacFieldRecord(#, #)", grid.}
+  {.importcpp: "#.writeScidacFieldRecord(gd(#), #)", grid.}
 
 proc writeScidacFieldRecord*(w: var SciDACWriter; field: var Field) =
   let record = newRecord()
@@ -290,6 +293,16 @@ template write*(w: var SciDACWriter; filename: string; work: untyped): untyped =
   block: work
   w.close()
 
+proc readScidacConfiguration*(field: var Field; filename: string) =
+  var reader = newSciDACReader()
+  reader.read(filename):
+    reader.readScidacFieldRecord(field)
+
+proc writeScidacConfiguration*(field: var Field; filename: string) =
+  var writer = newSciDACWriterImpl(field.cartesian().isBoss())
+  writer.write(filename):
+    writer.writeScidacFieldRecord(field)
+
 #[ ILDG read facilities ]#
 
 proc newILDGReader*: ILDGReader {.importcpp: "Grid::IldgReader()", grid, constructor.}
@@ -300,13 +313,13 @@ proc open*(r: var ILDGReader; filename: cstring)
 proc close*(r: var ILDGReader) {.importcpp: "#.close()", grid.}
 
 proc readConfiguration*(r: var ILDGReader; field: var GaugeField; header: var Header) 
-  {.importcpp: "#.readConfiguration(#, #)", grid.}
+  {.importcpp: "#.readConfiguration(gd(#), #)", grid.}
 
 proc readConfiguration*(r: var ILDGReader; field: var GaugeField) =
   var header = newHeader()
   r.readConfiguration(field, header)
 
-proc readConfiguration*(field: var GaugeField; filename: string) =
+proc readILDGConfiguration*(field: var GaugeField; filename: string) =
   var reader = newILDGReader()
   reader.open(filename.cstring)
   reader.readConfiguration(field)
@@ -334,7 +347,7 @@ proc writeConfiguration*(
   field: var GaugeField; 
   sequence: cint; 
   lfn, description: cstring
-) {.importcpp: "#.writeConfiguration(#, #, std::string(#), std::string(#))", grid.}
+) {.importcpp: "#.writeConfiguration(gd(#), #, std::string(#), std::string(#))", grid.}
 
 proc writeConfiguration*(
   w: var ILDGWriter; 
@@ -344,14 +357,16 @@ proc writeConfiguration*(
   description: string = ""
 ) = w.writeConfiguration(field, sequence, lfn.cstring, description.cstring)
 
-proc writeConfiguration*(
+proc writeILDGConfiguration*(
   field: var GaugeField;
+  filename: string;
   sequence: cint = cint(0);
   lfn: string = "";
   description: string = ""
 ) =
-  var writer = newILDGWriter()
-  writer.writeConfiguration(field, sequence, lfn.cstring, description.cstring)
+  var writer = newILDGWriterImpl(field.cartesian().isBoss())
+  writer.write(filename):
+    writer.writeConfiguration(field, sequence, lfn.cstring, description.cstring)
 
 #[ ILDG misc ]#
 
