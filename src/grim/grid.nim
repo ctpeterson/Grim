@@ -110,7 +110,21 @@ when DefaultPrecision == 32:
 else:
   type Real* = RealD
   type Complex* = ComplexD
+
+#[ Grid complex type ]#
   
+proc newComplex*[T](re: T, im: T): Complex
+  {.importcpp: "Grid::Complex(@)", constructor, grid.}
+
+proc newReal*(x: float): Real
+  {.importcpp: "Grid::Real(@)", constructor, grid.}
+
+proc toComplex*(re: Real): Complex = newComplex(re, newReal(0.0))
+
+proc toComplex*(re: float): Complex = newComplex(newReal(re), newReal(0.0))
+
+proc toComplex*(c: Complex): Complex = c
+
 #[ initialization/finalization ]#
 
 proc grid_init(argc: ptr cint, argv: ptr cstringArray) 

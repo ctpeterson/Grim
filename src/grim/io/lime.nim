@@ -1,6 +1,6 @@
 #[ 
   Grim: https://github.com/ctpeterson/Grim
-  Source file: src/grim/io/scidac.nim
+  Source file: src/grim/io/lime.nim
 
   Author: Curtis Taylor Peterson <curtistaylorpetersonwork@gmail.com>
 
