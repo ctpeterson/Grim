@@ -143,12 +143,23 @@ macro newFieldType*(name: untyped): untyped =
     proc base*(field: var `name`): ptr Base {.importcpp: "gd(#).Grid()", grid.}
     proc base*(field: var `nameD`): ptr Base {.importcpp: "gd(#).Grid()", grid.}
     proc base*(field: var `nameF`): ptr Base {.importcpp: "gd(#).Grid()", grid.}
+
+    proc base*(field: `name`): ptr Base {.importcpp: "gd(#).Grid()", grid.}
+    proc base*(field: `nameD`): ptr Base {.importcpp: "gd(#).Grid()", grid.}
+    proc base*(field: `nameF`): ptr Base {.importcpp: "gd(#).Grid()", grid.}
   
     template cartesian*(field: var `name`): ptr Cartesian =
       cast[ptr Cartesian](field.base())
     template cartesian*(field: var `nameD`): ptr Cartesian =
       cast[ptr Cartesian](field.base())
     template cartesian*(field: var `nameF`): ptr Cartesian =
+      cast[ptr Cartesian](field.base())
+  
+    template cartesian*(field: `name`): ptr Cartesian =
+      cast[ptr Cartesian](field.base())
+    template cartesian*(field: `nameD`): ptr Cartesian =
+      cast[ptr Cartesian](field.base())
+    template cartesian*(field: `nameF`): ptr Cartesian =
       cast[ptr Cartesian](field.base())
 
     # checkerboard getter

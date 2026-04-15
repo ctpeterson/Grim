@@ -33,6 +33,18 @@ import types/[field]
 
 header()
 
+when DefaultPrecision == 32:
+  const staggered = "Grid::NaiveStaggeredFermionF"
+  const improved = "Grid::ImprovedStaggeredFermionF"
+  const bosonCpp = "Grid::LatticeColourVectorF"
+else:
+  const staggered = "Grid::NaiveStaggeredFermionD"
+  const improved = "Grid::ImprovedStaggeredFermionD"
+  const bosonCpp = "Grid::LatticeColourVectorD"
+
+const schurStaggered = "Grid::SchurStaggeredOperator<" & staggered & ", " & bosonCpp & ">"
+const schurImprovedStaggered = "Grid::SchurStaggeredOperator<" & improved & ", " & bosonCpp & ">"
+
 type StaggeredImplParams {.importcpp: "Grid::StaggeredImplParams", grid.} = object
 
 type StaggeredContext* = object
@@ -41,14 +53,13 @@ type StaggeredContext* = object
   c1*, c2*: float
   u0*: float
 
-when DefaultPrecision == 32:
-  type 
-    StaggeredOperator* {.importcpp: "Grid::NaiveStaggeredFermionF", grid.} = object
-    ImprovedStaggeredOperator* {.importcpp: "Grid::ImprovedStaggeredFermionF", grid.} = object
-else:
-  type 
-    StaggeredOperator* {.importcpp: "Grid::NaiveStaggeredFermionD", grid.} = object
-    ImprovedStaggeredOperator* {.importcpp: "Grid::ImprovedStaggeredFermionD", grid.} = object
+type 
+  StaggeredOperator* {.importcpp: staggered, grid.} = object
+  ImprovedStaggeredOperator* {.importcpp: improved, grid.} = object
+  SchurStaggered* {.importcpp: schurStaggered, grid.} = object
+  SchurImprovedStaggered* {.importcpp: schurImprovedStaggered, grid.} = object
+
+type SchurStaggeredOperator* = SchurStaggered | SchurImprovedStaggered
 
 # vvvvv after Curtis' PR vvvvv
 #proc newStaggeredImplParams(boundaryConditions: Vector[Complex]): StaggeredImplParams 
@@ -88,28 +99,16 @@ proc newStaggeredContext*(
 ): StaggeredContext =
   return newStaggeredContext(mass, defaultBoundaryConditions(), c1, c2, u0)
 
-#proc import*()
-
 #[ "naive" staggered fermion wrapper ]#
 
-when DefaultPrecision == 32:
-  proc newStaggeredOperator(
-    grid: Cartesian, 
-    rbgrid: RedBlackCartesian, 
-    mass: RealD,
-    c1: RealD,
-    u0: RealD,
-    impl: StaggeredImplParams
-  ): StaggeredOperator {.importcpp: "Grid::NaiveStaggeredFermionF(@)", constructor, grid.}
-else:
-  proc newStaggeredOperator(
-    grid: Cartesian, 
-    rbgrid: RedBlackCartesian, 
-    mass: RealD,
-    c1: RealD,
-    u0: RealD,
-    impl: StaggeredImplParams
-  ): StaggeredOperator {.importcpp: "Grid::NaiveStaggeredFermionD(@)", constructor, grid.}
+proc newStaggeredOperator(
+  grid: Cartesian, 
+  rbgrid: RedBlackCartesian, 
+  mass: RealD,
+  c1: RealD,
+  u0: RealD,
+  impl: StaggeredImplParams
+): StaggeredOperator {.importcpp: staggered & "(@)", constructor, grid.}
 
 template newStaggeredOperator*(
   ctx: StaggeredContext,
@@ -125,28 +124,36 @@ template newStaggeredOperator*(
     ctx.impl
   )
 
+proc setGauge*(stag: var StaggeredOperator; u: GaugeField) 
+  {.importcpp: "#.ImportGauge(gd(#))", grid.}
+
+proc apply*(stag: var StaggeredOperator; phi, psi: BosonField) 
+  {.importcpp: "#.M(gd(#), gd(#))", grid.}
+
+proc apply*(stag: var StaggeredOperator; phi: BosonField): BosonField =
+  var grid = phi.base()
+  result = grid.newBosonField()
+  apply(stag, phi, result)
+
+proc applyDagger*(stag: var StaggeredOperator; phi, psi: BosonField) 
+  {.importcpp: "#.Mdag(gd(#), gd(#))", grid.}
+
+proc applyDagger*(stag: var StaggeredOperator; phi: BosonField): BosonField =
+  var grid = phi.base()
+  result = grid.newBosonField()
+  applyDagger(stag, phi, result)
+
 #[ improved staggered fermion wrapper ]#
 
-when DefaultPrecision == 32:
-  proc newImprovedStaggeredOperator(
-    grid: Cartesian, 
-    rbgrid: RedBlackCartesian, 
-    mass: RealD,
-    c1: RealD,
-    c2: RealD,
-    u0: RealD,
-    impl: StaggeredImplParams
-  ): ImprovedStaggeredOperator {.importcpp: "Grid::ImprovedStaggeredFermionF(@)", constructor, grid.}
-else:
-  proc newImprovedStaggeredOperator(
-    grid: Cartesian, 
-    rbgrid: RedBlackCartesian, 
-    mass: RealD,
-    c1: RealD,
-    c2: RealD,
-    u0: RealD,
-    impl: StaggeredImplParams
-  ): ImprovedStaggeredOperator {.importcpp: "Grid::ImprovedStaggeredFermionD(@)", constructor, grid.}
+proc newImprovedStaggeredOperator(
+  grid: Cartesian, 
+  rbgrid: RedBlackCartesian, 
+  mass: RealD,
+  c1: RealD,
+  c2: RealD,
+  u0: RealD,
+  impl: StaggeredImplParams
+): ImprovedStaggeredOperator {.importcpp: improved & "(@)", constructor, grid.}
 
 template newImprovedStaggeredOperator*(
   ctx: StaggeredContext,
@@ -163,10 +170,91 @@ template newImprovedStaggeredOperator*(
     ctx.impl
   )
 
+proc setGauge*(stag: var ImprovedStaggeredOperator; u, ul: GaugeField) 
+  {.importcpp: "#.ImportGauge(gd(#), gd(#))", grid.}
+
+proc apply*(stag: var ImprovedStaggeredOperator; phi, psi: BosonField) 
+  {.importcpp: "#.M(gd(#), gd(#))", grid.}
+
+proc apply*(stag: var ImprovedStaggeredOperator; phi: BosonField): BosonField =
+  var grid = phi.base()
+  result = grid.newBosonField()
+  apply(stag, phi, result)
+
+proc applyDagger*(stag: var ImprovedStaggeredOperator; phi, psi: BosonField) 
+  {.importcpp: "#.Mdag(gd(#), gd(#))", grid.}
+
+proc applyDagger*(stag: var ImprovedStaggeredOperator; phi: BosonField): BosonField =
+  var grid = phi.base()
+  result = grid.newBosonField()
+  applyDagger(stag, phi, result)
+
+#[ Schur even-odd preconditioned staggered operators ]#
+
+proc newSchurStaggered(stag: var StaggeredOperator): SchurStaggered
+  {.importcpp: schurStaggered & "(@)", constructor, grid.}
+
+proc newSchurImprovedStaggered(
+  stag: var ImprovedStaggeredOperator
+): SchurImprovedStaggered
+  {.importcpp: schurImprovedStaggered & "(@)", constructor, grid.}
+
+template newSchurOperator*(stag: var StaggeredOperator): untyped =
+  newSchurStaggered(stag)
+
+template newSchurOperator*(stag: var ImprovedStaggeredOperator): untyped =
+  newSchurImprovedStaggered(stag)
+
+proc apply*(op: var SchurStaggeredOperator; src, dst: BosonField)
+  {.importcpp: "#.Mpc(gd(#), gd(#))", grid.}
+
+proc apply*(op: var SchurStaggeredOperator; src: BosonField): BosonField =
+  var grid = src.base()
+  result = grid.newBosonField()
+  apply(op, src, result)
+
+proc applyDagger*(op: var SchurStaggeredOperator; src, dst: BosonField)
+  {.importcpp: "#.MpcDag(gd(#), gd(#))", grid.}
+
+proc applyDagger*(op: var SchurStaggeredOperator; src: BosonField): BosonField =
+  var grid = src.base()
+  result = grid.newBosonField()
+  applyDagger(op, src, result)
+
 when isMainModule:
   grid:
     var grid = newCartesian()
     var rbgrid = newRedBlackCartesian(grid)
-    let ctx = newStaggeredContext(0.1)
+    let mass = 0.1
+    let ctx = newStaggeredContext(mass)
     var stag1 = ctx.newStaggeredOperator(grid, rbgrid)
     var stag3 = ctx.newImprovedStaggeredOperator(grid, rbgrid)
+    var u = grid.newGaugeField()
+    var ul = grid.newGaugeField()
+    var phi = grid.newBosonField()
+    var psi = grid.newBosonField()
+    
+    stag1.setGauge(u)
+    stag3.setGauge(u, ul)
+
+    stag1.apply(phi, psi)
+    psi = stag1.apply(phi)
+
+    stag1.applyDagger(phi, psi)
+    psi = stag1.applyDagger(phi)
+
+    stag3.apply(phi, psi)
+    psi = stag3.apply(phi)
+
+    stag3.applyDagger(phi, psi)
+    psi = stag3.applyDagger(phi)
+
+    var schur1 = newSchurOperator(stag1)
+    var rbphi = rbgrid.newBosonField()
+    var rbpsi = rbgrid.newBosonField()
+    schur1.apply(rbphi, rbpsi)
+    schur1.applyDagger(rbphi, rbpsi)
+
+    var schur3 = newSchurOperator(stag3)
+    schur3.apply(rbphi, rbpsi)
+    schur3.applyDagger(rbphi, rbpsi)
