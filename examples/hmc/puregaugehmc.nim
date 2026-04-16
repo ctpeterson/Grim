@@ -72,8 +72,7 @@ grid:
       u[mu] = exponential(p[mu], dt) * u[mu]
 
   template momentumUpdate(dt: float) =
-    var force = grid.newGaugeField()
-    coeffs.force(u, force)
+    let force = coeffs.force(u)
     p -= dt*force
   
   template evolve(trajectoryLength: float) =
@@ -90,7 +89,7 @@ grid:
   # io operations for gauge field & rng
   if start == "read":
     let filename = filenameBase & "_" & $currentTrajectory
-    readConfiguration(u, filename & ".lat")
+    readScidacConfiguration(u, filename & ".lat")
     readRNG(srng, prng, filename & ".rng")
   else:
     prng.seed(parallelSeed)
@@ -127,7 +126,7 @@ grid:
     # save gauge field and rng state
     if (trajectory + 1) mod saveFreq == 0:
       let filename = filenameBase & "_" & $(trajectory + 1)
-      writeConfiguration(u, filename & ".lat")
+      writeScidacConfiguration(u, filename & ".lat")
       writeRNG(srng, prng, filename & ".rng")
 
 

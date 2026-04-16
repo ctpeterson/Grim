@@ -31,24 +31,24 @@ import grid
 
 header()
 
-type ParallelRNG* {.importcpp: "Grid::GridParallelRNG", grid.} = object
-type SerialRNG* {.importcpp: "Grid::GridSerialRNG", grid.} = object
+type ParallelRNG* {.importcpp: "Grid::GridParallelRNG", grim.} = object
+type SerialRNG* {.importcpp: "Grid::GridSerialRNG", grim.} = object
 
 proc newParallelRNG(grid: ptr Grid): ParallelRNG
-  {.importcpp: "Grid::GridParallelRNG(@)", grid, constructor.}
+  {.importcpp: "Grid::GridParallelRNG(@)", grim, constructor.}
 
 proc newSerialRNG*(): SerialRNG
-  {.importcpp: "Grid::GridSerialRNG()", grid, constructor.}
+  {.importcpp: "Grid::GridSerialRNG()", grim, constructor.}
 
 proc toInt[T](s: seq[T]): seq[int] =
   result = newSeq[int](s.len)
   for i in 0..<s.len: result[i] = int(s[i])
 
 proc seed(rng: var ParallelRNG; seeds: Vector[cint]) 
-  {.importcpp: "#.SeedFixedIntegers(@)", grid.}
+  {.importcpp: "#.SeedFixedIntegers(@)", grim.}
 
 proc seed(rng: var SerialRNG; seeds: Vector[cint]) 
-  {.importcpp: "#.SeedFixedIntegers(@)", grid.}
+  {.importcpp: "#.SeedFixedIntegers(@)", grim.}
 
 proc seed*(rng: var ParallelRNG; seeds: seq[int]) =
   var cintSeeds = newSeq[cint](seeds.len)

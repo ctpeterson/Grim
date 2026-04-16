@@ -51,9 +51,9 @@ macro newViewType*(name: untyped): untyped =
   # such, a call like `newFieldType(LatticeReal)` evaluates to:
   #
   # type
-  #   LatticeRealView* {.importcpp: "Grid::LatticeView<Grid::LatticeReal::vector_object>", grid.} = object
-  #   LatticeRealDView* {.importcpp: "Grid::LatticeView<Grid::LatticeRealD::vector_object>", grid.} = object
-  #   LatticeRealFView* {.importcpp: "Grid::LatticeView<Grid::LatticeRealF::vector_object>", grid.} = object
+  #   LatticeRealView* {.importcpp: "Grid::LatticeView<Grid::LatticeReal::vector_object>", grim.} = object
+  #   LatticeRealDView* {.importcpp: "Grid::LatticeView<Grid::LatticeRealD::vector_object>", grim.} = object
+  #   LatticeRealFView* {.importcpp: "Grid::LatticeView<Grid::LatticeRealF::vector_object>", grim.} = object
   #
   # Additionally creates constructor, destroy hook, and some methods.
   let nameStr  = $name
@@ -82,23 +82,23 @@ macro newViewType*(name: untyped): untyped =
   result = quote do:
     # View types
     type
-      `viewName`* {.importcpp: `cppView`, grid.} = object
-      `viewNameD`* {.importcpp: `cppViewD`, grid.} = object
-      `viewNameF`* {.importcpp: `cppViewF`, grid.} = object
+      `viewName`* {.importcpp: `cppView`, grim.} = object
+      `viewNameD`* {.importcpp: `cppViewD`, grim.} = object
+      `viewNameF`* {.importcpp: `cppViewF`, grim.} = object
 
     # Site-level (vector_object) types
     type
-      `siteName`* {.importcpp: `cppSite`, grid, bycopy.} = object
-      `siteNameD`* {.importcpp: `cppSiteD`, grid, bycopy.} = object
-      `siteNameF`* {.importcpp: `cppSiteF`, grid, bycopy.} = object
+      `siteName`* {.importcpp: `cppSite`, grim, bycopy.} = object
+      `siteNameD`* {.importcpp: `cppSiteD`, grim, bycopy.} = object
+      `siteNameF`* {.importcpp: `cppSiteF`, grim, bycopy.} = object
 
     # View constructors — Lattice::View(mode) returns a LatticeView
     proc view*(field: var `name`, mode: ViewMode): `viewName`
-      {.importcpp: "gd(#).View(@)", grid.}
+      {.importcpp: "gd(#).View(@)", grim.}
     proc view*(field: var `nameD`, mode: ViewMode): `viewNameD`
-      {.importcpp: "gd(#).View(@)", grid.}
+      {.importcpp: "gd(#).View(@)", grim.}
     proc view*(field: var `nameF`, mode: ViewMode): `viewNameF`
-      {.importcpp: "gd(#).View(@)", grid.}
+      {.importcpp: "gd(#).View(@)", grim.}
 
     # Context-aware view constructors — resolve Access via dispatchKind
     template view*(field: var `name`, access: static Access): `viewName` =
@@ -109,38 +109,38 @@ macro newViewType*(name: untyped): untyped =
       field.view(viewMode(access))
 
     # size, begin, end
-    proc size*(v: `viewName`): uint64 {.importcpp: "#.size()", grid.}
-    proc size*(v: `viewNameD`): uint64 {.importcpp: "#.size()", grid.}
-    proc size*(v: `viewNameF`): uint64 {.importcpp: "#.size()", grid.}
+    proc size*(v: `viewName`): uint64 {.importcpp: "#.size()", grim.}
+    proc size*(v: `viewNameD`): uint64 {.importcpp: "#.size()", grim.}
+    proc size*(v: `viewNameF`): uint64 {.importcpp: "#.size()", grim.}
 
     # ViewClose — must be called when done with a view
-    proc viewClose(v: var `viewName`) {.importcpp: "#.ViewClose()", grid.}
-    proc viewClose(v: var `viewNameD`) {.importcpp: "#.ViewClose()", grid.}
-    proc viewClose(v: var `viewNameF`) {.importcpp: "#.ViewClose()", grid.}
+    proc viewClose(v: var `viewName`) {.importcpp: "#.ViewClose()", grim.}
+    proc viewClose(v: var `viewNameD`) {.importcpp: "#.ViewClose()", grim.}
+    proc viewClose(v: var `viewNameF`) {.importcpp: "#.ViewClose()", grim.}
 
     proc `=destroy`(v: var `viewName`) = v.viewClose()
     proc `=destroy`(v: var `viewNameD`) = v.viewClose()
     proc `=destroy`(v: var `viewNameF`) = v.viewClose()
 
     # read accessor
-    proc get*(v: `viewName`; idx: uint64): `siteName` {.importcpp: "#[@]", grid.}
-    proc get*(v: `viewNameD`; idx: uint64): `siteNameD` {.importcpp: "#[@]", grid.}
-    proc get*(v: `viewNameF`; idx: uint64): `siteNameF` {.importcpp: "#[@]", grid.}
+    proc get*(v: `viewName`; idx: uint64): `siteName` {.importcpp: "#[@]", grim.}
+    proc get*(v: `viewNameD`; idx: uint64): `siteNameD` {.importcpp: "#[@]", grim.}
+    proc get*(v: `viewNameF`; idx: uint64): `siteNameF` {.importcpp: "#[@]", grim.}
 
     # write accessor
-    #proc `opSet`*(v: var `viewName`; idx: uint64; val: `siteName`) {.importcpp: "#[#] = #", grid.}
-    #proc `opSet`*(v: var `viewNameD`; idx: uint64; val: `siteNameD`) {.importcpp: "#[#] = #", grid.}
-    #proc `opSet`*(v: var `viewNameF`; idx: uint64; val: `siteNameF`) {.importcpp: "#[#] = #", grid.}
+    #proc `opSet`*(v: var `viewName`; idx: uint64; val: `siteName`) {.importcpp: "#[#] = #", grim.}
+    #proc `opSet`*(v: var `viewNameD`; idx: uint64; val: `siteNameD`) {.importcpp: "#[#] = #", grim.}
+    #proc `opSet`*(v: var `viewNameF`; idx: uint64; val: `siteNameF`) {.importcpp: "#[#] = #", grim.}
 
     # arithmetic: addition
-    proc `opAdd`*(a, b: `siteName`): `siteName` {.importcpp: "(# + #)", grid.}
-    proc `opAdd`*(a, b: `siteNameD`): `siteNameD` {.importcpp: "(# + #)", grid.}
-    proc `opAdd`*(a, b: `siteNameF`): `siteNameF` {.importcpp: "(# + #)", grid.}
+    proc `opAdd`*(a, b: `siteName`): `siteName` {.importcpp: "(# + #)", grim.}
+    proc `opAdd`*(a, b: `siteNameD`): `siteNameD` {.importcpp: "(# + #)", grim.}
+    proc `opAdd`*(a, b: `siteNameF`): `siteNameF` {.importcpp: "(# + #)", grim.}
 
     # arithmetic: subtraction
-    proc `opSub`*(a, b: `siteName`): `siteName` {.importcpp: "(# - #)", grid.}
-    proc `opSub`*(a, b: `siteNameD`): `siteNameD` {.importcpp: "(# - #)", grid.}
-    proc `opSub`*(a, b: `siteNameF`): `siteNameF` {.importcpp: "(# - #)", grid.}
+    proc `opSub`*(a, b: `siteName`): `siteName` {.importcpp: "(# - #)", grim.}
+    proc `opSub`*(a, b: `siteNameD`): `siteNameD` {.importcpp: "(# - #)", grim.}
+    proc `opSub`*(a, b: `siteNameF`): `siteNameF` {.importcpp: "(# - #)", grim.}
 
     # NOTE: same-type multiplication is NOT generated here because `*`
     # has different semantics for different types (matrix multiply for
@@ -148,61 +148,61 @@ macro newViewType*(name: untyped): untyped =
     # same-type `*` is declared explicitly after the macro invocations.
 
     # mixed scalar arithmetic: scalar * site, site * scalar
-    proc `opMul`*(a: float64; b: `siteName`): `siteName` {.importcpp: "(# * #)", grid.}
-    proc `opMul`*(a: `siteName`; b: float64): `siteName` {.importcpp: "(# * #)", grid.}
-    proc `opMul`*(a: float64; b: `siteNameD`): `siteNameD` {.importcpp: "(# * #)", grid.}
-    proc `opMul`*(a: `siteNameD`; b: float64): `siteNameD` {.importcpp: "(# * #)", grid.}
-    proc `opMul`*(a: float32; b: `siteNameF`): `siteNameF` {.importcpp: "(# * #)", grid.}
-    proc `opMul`*(a: `siteNameF`; b: float32): `siteNameF` {.importcpp: "(# * #)", grid.}
+    proc `opMul`*(a: float64; b: `siteName`): `siteName` {.importcpp: "(# * #)", grim.}
+    proc `opMul`*(a: `siteName`; b: float64): `siteName` {.importcpp: "(# * #)", grim.}
+    proc `opMul`*(a: float64; b: `siteNameD`): `siteNameD` {.importcpp: "(# * #)", grim.}
+    proc `opMul`*(a: `siteNameD`; b: float64): `siteNameD` {.importcpp: "(# * #)", grim.}
+    proc `opMul`*(a: float32; b: `siteNameF`): `siteNameF` {.importcpp: "(# * #)", grim.}
+    proc `opMul`*(a: `siteNameF`; b: float32): `siteNameF` {.importcpp: "(# * #)", grim.}
 
     # mixed scalar arithmetic: scalar + site, site + scalar
-    proc `opAdd`*(a: float64; b: `siteName`): `siteName` {.importcpp: "(# + #)", grid.}
-    proc `opAdd`*(a: `siteName`; b: float64): `siteName` {.importcpp: "(# + #)", grid.}
-    proc `opAdd`*(a: float64; b: `siteNameD`): `siteNameD` {.importcpp: "(# + #)", grid.}
-    proc `opAdd`*(a: `siteNameD`; b: float64): `siteNameD` {.importcpp: "(# + #)", grid.}
-    proc `opAdd`*(a: float32; b: `siteNameF`): `siteNameF` {.importcpp: "(# + #)", grid.}
-    proc `opAdd`*(a: `siteNameF`; b: float32): `siteNameF` {.importcpp: "(# + #)", grid.}
+    proc `opAdd`*(a: float64; b: `siteName`): `siteName` {.importcpp: "(# + #)", grim.}
+    proc `opAdd`*(a: `siteName`; b: float64): `siteName` {.importcpp: "(# + #)", grim.}
+    proc `opAdd`*(a: float64; b: `siteNameD`): `siteNameD` {.importcpp: "(# + #)", grim.}
+    proc `opAdd`*(a: `siteNameD`; b: float64): `siteNameD` {.importcpp: "(# + #)", grim.}
+    proc `opAdd`*(a: float32; b: `siteNameF`): `siteNameF` {.importcpp: "(# + #)", grim.}
+    proc `opAdd`*(a: `siteNameF`; b: float32): `siteNameF` {.importcpp: "(# + #)", grim.}
 
     # mixed scalar arithmetic: site - scalar, scalar - site
-    proc `opSub`*(a: float64; b: `siteName`): `siteName` {.importcpp: "(# - #)", grid.}
-    proc `opSub`*(a: `siteName`; b: float64): `siteName` {.importcpp: "(# - #)", grid.}
-    proc `opSub`*(a: float64; b: `siteNameD`): `siteNameD` {.importcpp: "(# - #)", grid.}
-    proc `opSub`*(a: `siteNameD`; b: float64): `siteNameD` {.importcpp: "(# - #)", grid.}
-    proc `opSub`*(a: float32; b: `siteNameF`): `siteNameF` {.importcpp: "(# - #)", grid.}
-    proc `opSub`*(a: `siteNameF`; b: float32): `siteNameF` {.importcpp: "(# - #)", grid.}
+    proc `opSub`*(a: float64; b: `siteName`): `siteName` {.importcpp: "(# - #)", grim.}
+    proc `opSub`*(a: `siteName`; b: float64): `siteName` {.importcpp: "(# - #)", grim.}
+    proc `opSub`*(a: float64; b: `siteNameD`): `siteNameD` {.importcpp: "(# - #)", grim.}
+    proc `opSub`*(a: `siteNameD`; b: float64): `siteNameD` {.importcpp: "(# - #)", grim.}
+    proc `opSub`*(a: float32; b: `siteNameF`): `siteNameF` {.importcpp: "(# - #)", grim.}
+    proc `opSub`*(a: `siteNameF`; b: float32): `siteNameF` {.importcpp: "(# - #)", grim.}
 
     # arithmetic: unary negation
-    proc `opSub`*(a: `siteName`): `siteName` {.importcpp: "(-#)", grid.}
-    proc `opSub`*(a: `siteNameD`): `siteNameD` {.importcpp: "(-#)", grid.}
-    proc `opSub`*(a: `siteNameF`): `siteNameF` {.importcpp: "(-#)", grid.}
+    proc `opSub`*(a: `siteName`): `siteName` {.importcpp: "(-#)", grim.}
+    proc `opSub`*(a: `siteNameD`): `siteNameD` {.importcpp: "(-#)", grim.}
+    proc `opSub`*(a: `siteNameF`): `siteNameF` {.importcpp: "(-#)", grim.}
 
     # compound assignment
-    proc `opAddEq`*(a: var `siteName`; b: `siteName`) {.importcpp: "# += #", grid.}
-    proc `opAddEq`*(a: var `siteNameD`; b: `siteNameD`) {.importcpp: "# += #", grid.}
-    proc `opAddEq`*(a: var `siteNameF`; b: `siteNameF`) {.importcpp: "# += #", grid.}
+    proc `opAddEq`*(a: var `siteName`; b: `siteName`) {.importcpp: "# += #", grim.}
+    proc `opAddEq`*(a: var `siteNameD`; b: `siteNameD`) {.importcpp: "# += #", grim.}
+    proc `opAddEq`*(a: var `siteNameF`; b: `siteNameF`) {.importcpp: "# += #", grim.}
 
-    proc `opSubEq`*(a: var `siteName`; b: `siteName`) {.importcpp: "# -= #", grid.}
-    proc `opSubEq`*(a: var `siteNameD`; b: `siteNameD`) {.importcpp: "# -= #", grid.}
-    proc `opSubEq`*(a: var `siteNameF`; b: `siteNameF`) {.importcpp: "# -= #", grid.}
+    proc `opSubEq`*(a: var `siteName`; b: `siteName`) {.importcpp: "# -= #", grim.}
+    proc `opSubEq`*(a: var `siteNameD`; b: `siteNameD`) {.importcpp: "# -= #", grim.}
+    proc `opSubEq`*(a: var `siteNameF`; b: `siteNameF`) {.importcpp: "# -= #", grim.}
 
-    proc `opMulEq`*(a: var `siteName`; b: `siteName`) {.importcpp: "# *= #", grid.}
-    proc `opMulEq`*(a: var `siteNameD`; b: `siteNameD`) {.importcpp: "# *= #", grid.}
-    proc `opMulEq`*(a: var `siteNameF`; b: `siteNameF`) {.importcpp: "# *= #", grid.}
+    proc `opMulEq`*(a: var `siteName`; b: `siteName`) {.importcpp: "# *= #", grim.}
+    proc `opMulEq`*(a: var `siteNameD`; b: `siteNameD`) {.importcpp: "# *= #", grim.}
+    proc `opMulEq`*(a: var `siteNameF`; b: `siteNameF`) {.importcpp: "# *= #", grim.}
 
     # adjoint (conjugate transpose)
-    proc adjoint*(a: `siteName`): `siteName` {.importcpp: "Grid::adj(@)", grid.}
-    proc adjoint*(a: `siteNameD`): `siteNameD` {.importcpp: "Grid::adj(@)", grid.}
-    proc adjoint*(a: `siteNameF`): `siteNameF` {.importcpp: "Grid::adj(@)", grid.}
+    proc adjoint*(a: `siteName`): `siteName` {.importcpp: "Grid::adj(@)", grim.}
+    proc adjoint*(a: `siteNameD`): `siteNameD` {.importcpp: "Grid::adj(@)", grim.}
+    proc adjoint*(a: `siteNameF`): `siteNameF` {.importcpp: "Grid::adj(@)", grim.}
 
     # conjugate (element-wise complex conjugation)
-    proc conjugate*(a: `siteName`): `siteName` {.importcpp: "Grid::conjugate(@)", grid.}
-    proc conjugate*(a: `siteNameD`): `siteNameD` {.importcpp: "Grid::conjugate(@)", grid.}
-    proc conjugate*(a: `siteNameF`): `siteNameF` {.importcpp: "Grid::conjugate(@)", grid.}
+    proc conjugate*(a: `siteName`): `siteName` {.importcpp: "Grid::conjugate(@)", grim.}
+    proc conjugate*(a: `siteNameD`): `siteNameD` {.importcpp: "Grid::conjugate(@)", grim.}
+    proc conjugate*(a: `siteNameF`): `siteNameF` {.importcpp: "Grid::conjugate(@)", grim.}
 
     # transpose
-    proc transpose*(a: `siteName`): `siteName` {.importcpp: "Grid::transpose(@)", grid.}
-    proc transpose*(a: `siteNameD`): `siteNameD` {.importcpp: "Grid::transpose(@)", grid.}
-    proc transpose*(a: `siteNameF`): `siteNameF` {.importcpp: "Grid::transpose(@)", grid.}
+    proc transpose*(a: `siteName`): `siteName` {.importcpp: "Grid::transpose(@)", grim.}
+    proc transpose*(a: `siteNameD`): `siteNameD` {.importcpp: "Grid::transpose(@)", grim.}
+    proc transpose*(a: `siteNameF`): `siteNameF` {.importcpp: "Grid::transpose(@)", grim.}
 
 newViewType(LatticeReal)
 newViewType(LatticeComplex)
@@ -266,60 +266,60 @@ type
    below instead. ]#
 
 # real × real → real
-proc `*`*(a, b: SiteReal): SiteReal {.importcpp: "(# * #)", grid.}
-proc `*`*(a, b: SiteRealD): SiteRealD {.importcpp: "(# * #)", grid.}
-proc `*`*(a, b: SiteRealF): SiteRealF {.importcpp: "(# * #)", grid.}
+proc `*`*(a, b: SiteReal): SiteReal {.importcpp: "(# * #)", grim.}
+proc `*`*(a, b: SiteRealD): SiteRealD {.importcpp: "(# * #)", grim.}
+proc `*`*(a, b: SiteRealF): SiteRealF {.importcpp: "(# * #)", grim.}
 
 # complex × complex → complex
-proc `*`*(a, b: SiteComplex): SiteComplex {.importcpp: "(# * #)", grid.}
-proc `*`*(a, b: SiteComplexD): SiteComplexD {.importcpp: "(# * #)", grid.}
-proc `*`*(a, b: SiteComplexF): SiteComplexF {.importcpp: "(# * #)", grid.}
+proc `*`*(a, b: SiteComplex): SiteComplex {.importcpp: "(# * #)", grim.}
+proc `*`*(a, b: SiteComplexD): SiteComplexD {.importcpp: "(# * #)", grim.}
+proc `*`*(a, b: SiteComplexF): SiteComplexF {.importcpp: "(# * #)", grim.}
 
 # color matrix × color matrix → color matrix
-proc `*`*(a, b: SiteColorMatrix): SiteColorMatrix {.importcpp: "(# * #)", grid.}
-proc `*`*(a, b: SiteColorMatrixD): SiteColorMatrixD {.importcpp: "(# * #)", grid.}
-proc `*`*(a, b: SiteColorMatrixF): SiteColorMatrixF {.importcpp: "(# * #)", grid.}
+proc `*`*(a, b: SiteColorMatrix): SiteColorMatrix {.importcpp: "(# * #)", grim.}
+proc `*`*(a, b: SiteColorMatrixD): SiteColorMatrixD {.importcpp: "(# * #)", grim.}
+proc `*`*(a, b: SiteColorMatrixF): SiteColorMatrixF {.importcpp: "(# * #)", grim.}
 
 # spin-color matrix × spin-color matrix → spin-color matrix
-proc `*`*(a, b: SiteSpinColorMatrix): SiteSpinColorMatrix {.importcpp: "(# * #)", grid.}
-proc `*`*(a, b: SiteSpinColorMatrixD): SiteSpinColorMatrixD {.importcpp: "(# * #)", grid.}
-proc `*`*(a, b: SiteSpinColorMatrixF): SiteSpinColorMatrixF {.importcpp: "(# * #)", grid.}
+proc `*`*(a, b: SiteSpinColorMatrix): SiteSpinColorMatrix {.importcpp: "(# * #)", grim.}
+proc `*`*(a, b: SiteSpinColorMatrixD): SiteSpinColorMatrixD {.importcpp: "(# * #)", grim.}
+proc `*`*(a, b: SiteSpinColorMatrixF): SiteSpinColorMatrixF {.importcpp: "(# * #)", grim.}
 
 # gauge field × gauge field → gauge field
-proc `*`*(a, b: SiteGaugeField): SiteGaugeField {.importcpp: "(# * #)", grid.}
-proc `*`*(a, b: SiteGaugeFieldD): SiteGaugeFieldD {.importcpp: "(# * #)", grid.}
-proc `*`*(a, b: SiteGaugeFieldF): SiteGaugeFieldF {.importcpp: "(# * #)", grid.}
+proc `*`*(a, b: SiteGaugeField): SiteGaugeField {.importcpp: "(# * #)", grim.}
+proc `*`*(a, b: SiteGaugeFieldD): SiteGaugeFieldD {.importcpp: "(# * #)", grim.}
+proc `*`*(a, b: SiteGaugeFieldF): SiteGaugeFieldF {.importcpp: "(# * #)", grim.}
 
 # propagator × propagator → propagator
-proc `*`*(a, b: SitePropagator): SitePropagator {.importcpp: "(# * #)", grid.}
-proc `*`*(a, b: SitePropagatorD): SitePropagatorD {.importcpp: "(# * #)", grid.}
-proc `*`*(a, b: SitePropagatorF): SitePropagatorF {.importcpp: "(# * #)", grid.}
+proc `*`*(a, b: SitePropagator): SitePropagator {.importcpp: "(# * #)", grim.}
+proc `*`*(a, b: SitePropagatorD): SitePropagatorD {.importcpp: "(# * #)", grim.}
+proc `*`*(a, b: SitePropagatorF): SitePropagatorF {.importcpp: "(# * #)", grim.}
 
 #[ site-level color matrix operations ]#
 
 # trace: color matrix → complex
 proc trace*(src: SiteColorMatrix): SiteComplex
-  {.importcpp: "Grid::trace(@)", grid.}
+  {.importcpp: "Grid::trace(@)", grim.}
 proc trace*(src: SiteColorMatrixD): SiteComplexD
-  {.importcpp: "Grid::trace(@)", grid.}
+  {.importcpp: "Grid::trace(@)", grim.}
 proc trace*(src: SiteColorMatrixF): SiteComplexF
-  {.importcpp: "Grid::trace(@)", grid.}
+  {.importcpp: "Grid::trace(@)", grim.}
 
 # trace: spin-color matrix → complex
 proc trace*(src: SiteSpinColorMatrix): SiteComplex
-  {.importcpp: "Grid::trace(@)", grid.}
+  {.importcpp: "Grid::trace(@)", grim.}
 proc trace*(src: SiteSpinColorMatrixD): SiteComplexD
-  {.importcpp: "Grid::trace(@)", grid.}
+  {.importcpp: "Grid::trace(@)", grim.}
 proc trace*(src: SiteSpinColorMatrixF): SiteComplexF
-  {.importcpp: "Grid::trace(@)", grid.}
+  {.importcpp: "Grid::trace(@)", grim.}
 
 # traceless antihermitian projection
 proc tracelessAntihermitianProjection*(src: SiteColorMatrix): SiteColorMatrix
-  {.importcpp: "Grid::Ta(@)", grid.}
+  {.importcpp: "Grid::Ta(@)", grim.}
 proc tracelessAntihermitianProjection*(src: SiteColorMatrixD): SiteColorMatrixD
-  {.importcpp: "Grid::Ta(@)", grid.}
+  {.importcpp: "Grid::Ta(@)", grim.}
 proc tracelessAntihermitianProjection*(src: SiteColorMatrixF): SiteColorMatrixF
-  {.importcpp: "Grid::Ta(@)", grid.}
+  {.importcpp: "Grid::Ta(@)", grim.}
 
 # NOTE: Grid::Determinant is broken at tensor level for SIMD vector types
 # (Tensor_determinant.h has iScalar vs Grid_simd conversion bug)
@@ -327,38 +327,38 @@ proc tracelessAntihermitianProjection*(src: SiteColorMatrixF): SiteColorMatrixF
 
 # exponentiate: matrix exponential (for anti-hermitian input)
 proc exponentiate*(src: SiteColorMatrix; alpha: float64 = 1.0; nexp: int = 12): SiteColorMatrix
-  {.importcpp: "Grid::Exponentiate(#, #, #)", grid.}
+  {.importcpp: "Grid::Exponentiate(#, #, #)", grim.}
 proc exponentiate*(src: SiteColorMatrixD; alpha: float64 = 1.0; nexp: int = 12): SiteColorMatrixD
-  {.importcpp: "Grid::Exponentiate(#, #, #)", grid.}
+  {.importcpp: "Grid::Exponentiate(#, #, #)", grim.}
 proc exponentiate*(src: SiteColorMatrixF; alpha: float64 = 1.0; nexp: int = 12): SiteColorMatrixF
-  {.importcpp: "Grid::Exponentiate(#, #, #)", grid.}
+  {.importcpp: "Grid::Exponentiate(#, #, #)", grim.}
 
 # project on group (Gram-Schmidt reorthogonalization)
 proc projectOnGroup*(src: SiteColorMatrix): SiteColorMatrix
-  {.importcpp: "Grid::ProjectOnGroup(@)", grid.}
+  {.importcpp: "Grid::ProjectOnGroup(@)", grim.}
 proc projectOnGroup*(src: SiteColorMatrixD): SiteColorMatrixD
-  {.importcpp: "Grid::ProjectOnGroup(@)", grid.}
+  {.importcpp: "Grid::ProjectOnGroup(@)", grim.}
 proc projectOnGroup*(src: SiteColorMatrixF): SiteColorMatrixF
-  {.importcpp: "Grid::ProjectOnGroup(@)", grid.}
+  {.importcpp: "Grid::ProjectOnGroup(@)", grim.}
 
 # color matrix × color matrix (already in macro for same type, but
 # we also provide complex × matrix and matrix × vector below)
 
 # complex × color matrix → color matrix
 proc `*`*(a: SiteComplex; b: SiteColorMatrix): SiteColorMatrix
-  {.importcpp: "(# * #)", grid.}
+  {.importcpp: "(# * #)", grim.}
 proc `*`*(a: SiteComplexD; b: SiteColorMatrixD): SiteColorMatrixD
-  {.importcpp: "(# * #)", grid.}
+  {.importcpp: "(# * #)", grim.}
 proc `*`*(a: SiteComplexF; b: SiteColorMatrixF): SiteColorMatrixF
-  {.importcpp: "(# * #)", grid.}
+  {.importcpp: "(# * #)", grim.}
 
 # color matrix × color vector → color vector
 proc `*`*(a: SiteColorMatrix; b: SiteColorVector): SiteColorVector
-  {.importcpp: "(# * #)", grid.}
+  {.importcpp: "(# * #)", grim.}
 proc `*`*(a: SiteColorMatrixD; b: SiteColorVectorD): SiteColorVectorD
-  {.importcpp: "(# * #)", grid.}
+  {.importcpp: "(# * #)", grim.}
 proc `*`*(a: SiteColorMatrixF; b: SiteColorVectorF): SiteColorVectorF
-  {.importcpp: "(# * #)", grid.}
+  {.importcpp: "(# * #)", grim.}
 
 #[ site-level complex operations ]#
 
@@ -373,47 +373,47 @@ proc `*`*(a: SiteColorMatrixF; b: SiteColorVectorF): SiteColorVectorF
 
 # complex × color vector → color vector
 proc `*`*(a: SiteComplex; b: SiteColorVector): SiteColorVector
-  {.importcpp: "(# * #)", grid.}
+  {.importcpp: "(# * #)", grim.}
 proc `*`*(a: SiteComplexD; b: SiteColorVectorD): SiteColorVectorD
-  {.importcpp: "(# * #)", grid.}
+  {.importcpp: "(# * #)", grim.}
 proc `*`*(a: SiteComplexF; b: SiteColorVectorF): SiteColorVectorF
-  {.importcpp: "(# * #)", grid.}
+  {.importcpp: "(# * #)", grim.}
 
 #[ site-level color vector operations ]#
 
 # inner product: vector × vector → complex (matches field.nim `*`)
 proc `*`*(a, b: SiteColorVector): SiteComplex
-  {.importcpp: "Grid::innerProduct(@)", grid.}
+  {.importcpp: "Grid::innerProduct(@)", grim.}
 proc `*`*(a, b: SiteColorVectorD): SiteComplexD
-  {.importcpp: "Grid::innerProduct(@)", grid.}
+  {.importcpp: "Grid::innerProduct(@)", grim.}
 proc `*`*(a, b: SiteColorVectorF): SiteComplexF
-  {.importcpp: "Grid::innerProduct(@)", grid.}
+  {.importcpp: "Grid::innerProduct(@)", grim.}
 
 # outer product: vector × vector → matrix (matches field.nim `><`)
 proc `><`*(a, b: SiteColorVector): SiteColorMatrix
-  {.importcpp: "Grid::outerProduct(@)", grid.}
+  {.importcpp: "Grid::outerProduct(@)", grim.}
 proc `><`*(a, b: SiteColorVectorD): SiteColorMatrixD
-  {.importcpp: "Grid::outerProduct(@)", grid.}
+  {.importcpp: "Grid::outerProduct(@)", grim.}
 proc `><`*(a, b: SiteColorVectorF): SiteColorMatrixF
-  {.importcpp: "Grid::outerProduct(@)", grid.}
+  {.importcpp: "Grid::outerProduct(@)", grim.}
 
 #[ site-level gauge field (Lorentz-indexed) operations ]#
 
 # peekIndex<0>: gauge field site → color matrix site
 proc peekLorentz*(src: SiteGaugeField; mu: cint): SiteColorMatrix
-  {.importcpp: "Grid::peekIndex<0>(@)", grid.}
+  {.importcpp: "Grid::peekIndex<0>(@)", grim.}
 proc peekLorentz*(src: SiteGaugeFieldD; mu: cint): SiteColorMatrixD
-  {.importcpp: "Grid::peekIndex<0>(@)", grid.}
+  {.importcpp: "Grid::peekIndex<0>(@)", grim.}
 proc peekLorentz*(src: SiteGaugeFieldF; mu: cint): SiteColorMatrixF
-  {.importcpp: "Grid::peekIndex<0>(@)", grid.}
+  {.importcpp: "Grid::peekIndex<0>(@)", grim.}
 
 # pokeIndex<0>: poke color matrix into gauge field site
 proc pokeLorentz*(dst: var SiteGaugeField; src: SiteColorMatrix; mu: cint)
-  {.importcpp: "Grid::pokeIndex<0>(@)", grid.}
+  {.importcpp: "Grid::pokeIndex<0>(@)", grim.}
 proc pokeLorentz*(dst: var SiteGaugeFieldD; src: SiteColorMatrixD; mu: cint)
-  {.importcpp: "Grid::pokeIndex<0>(@)", grid.}
+  {.importcpp: "Grid::pokeIndex<0>(@)", grim.}
 proc pokeLorentz*(dst: var SiteGaugeFieldF; src: SiteColorMatrixF; mu: cint)
-  {.importcpp: "Grid::pokeIndex<0>(@)", grid.}
+  {.importcpp: "Grid::pokeIndex<0>(@)", grim.}
 
 template `[]`*(u: GaugeFieldSite; mu: int): untyped = peekLorentz(u, cint(mu))
 
@@ -424,19 +424,19 @@ template `[]=`*(u: var GaugeFieldSite; mu: int; src: GaugeLinkFieldSite): untype
 
 # peekIndex<2>: color matrix site → complex site (element i,j)
 proc peekColor*(src: SiteColorMatrix; i,j: cint): SiteComplex
-  {.importcpp: "Grid::peekIndex<2>(@)", grid.}
+  {.importcpp: "Grid::peekIndex<2>(@)", grim.}
 proc peekColor*(src: SiteColorMatrixD; i,j: cint): SiteComplexD
-  {.importcpp: "Grid::peekIndex<2>(@)", grid.}
+  {.importcpp: "Grid::peekIndex<2>(@)", grim.}
 proc peekColor*(src: SiteColorMatrixF; i,j: cint): SiteComplexF
-  {.importcpp: "Grid::peekIndex<2>(@)", grid.}
+  {.importcpp: "Grid::peekIndex<2>(@)", grim.}
 
 # pokeIndex<2>: poke complex into color matrix site (element i,j)
 proc pokeColor*(dst: var SiteColorMatrix; src: SiteComplex; i,j: cint)
-  {.importcpp: "Grid::pokeIndex<2>(@)", grid.}
+  {.importcpp: "Grid::pokeIndex<2>(@)", grim.}
 proc pokeColor*(dst: var SiteColorMatrixD; src: SiteComplexD; i,j: cint)
-  {.importcpp: "Grid::pokeIndex<2>(@)", grid.}
+  {.importcpp: "Grid::pokeIndex<2>(@)", grim.}
 proc pokeColor*(dst: var SiteColorMatrixF; src: SiteComplexF; i,j: cint)
-  {.importcpp: "Grid::pokeIndex<2>(@)", grid.}
+  {.importcpp: "Grid::pokeIndex<2>(@)", grim.}
 
 template `[]`*(u: GaugeLinkFieldSite; i,j: int): untyped = peekColor(u, cint(i), cint(j))
 
@@ -447,19 +447,19 @@ template `[]=`*(u: var GaugeLinkFieldSite; i,j: int; src: ComplexFieldSite): unt
 
 # peekIndex<1>: spin-color vector site → color vector site (spin s)
 proc peekSpin*(src: SiteSpinColorVector; s: cint): SiteColorVector
-  {.importcpp: "Grid::peekIndex<1>(@)", grid.}
+  {.importcpp: "Grid::peekIndex<1>(@)", grim.}
 proc peekSpin*(src: SiteSpinColorVectorD; s: cint): SiteColorVectorD
-  {.importcpp: "Grid::peekIndex<1>(@)", grid.}
+  {.importcpp: "Grid::peekIndex<1>(@)", grim.}
 proc peekSpin*(src: SiteSpinColorVectorF; s: cint): SiteColorVectorF
-  {.importcpp: "Grid::peekIndex<1>(@)", grid.}
+  {.importcpp: "Grid::peekIndex<1>(@)", grim.}
 
 # pokeIndex<1>: poke color vector into spin-color vector site
 proc pokeSpin*(dst: var SiteSpinColorVector; src: SiteColorVector; s: cint)
-  {.importcpp: "Grid::pokeIndex<1>(@)", grid.}
+  {.importcpp: "Grid::pokeIndex<1>(@)", grim.}
 proc pokeSpin*(dst: var SiteSpinColorVectorD; src: SiteColorVectorD; s: cint)
-  {.importcpp: "Grid::pokeIndex<1>(@)", grid.}
+  {.importcpp: "Grid::pokeIndex<1>(@)", grim.}
 proc pokeSpin*(dst: var SiteSpinColorVectorF; src: SiteColorVectorF; s: cint)
-  {.importcpp: "Grid::pokeIndex<1>(@)", grid.}
+  {.importcpp: "Grid::pokeIndex<1>(@)", grim.}
 
 template `[]`*(u: FermionFieldSite; s: int): untyped = peekSpin(u, cint(s))
 
@@ -470,30 +470,30 @@ template `[]=`*(u: var FermionFieldSite; s: int; src: BosonFieldSite): untyped =
 
 # complex × gauge field site → gauge field site
 proc `*`*(a: SiteComplex; b: SiteGaugeField): SiteGaugeField
-  {.importcpp: "(# * #)", grid.}
+  {.importcpp: "(# * #)", grim.}
 proc `*`*(a: SiteComplexD; b: SiteGaugeFieldD): SiteGaugeFieldD
-  {.importcpp: "(# * #)", grid.}
+  {.importcpp: "(# * #)", grim.}
 proc `*`*(a: SiteComplexF; b: SiteGaugeFieldF): SiteGaugeFieldF
-  {.importcpp: "(# * #)", grid.}
+  {.importcpp: "(# * #)", grim.}
 
 # traceless antihermitian projection for gauge field sites
 proc tracelessAntihermitianProjection*(src: SiteGaugeField): SiteGaugeField
-  {.importcpp: "Grid::Ta(@)", grid.}
+  {.importcpp: "Grid::Ta(@)", grim.}
 proc tracelessAntihermitianProjection*(src: SiteGaugeFieldD): SiteGaugeFieldD
-  {.importcpp: "Grid::Ta(@)", grid.}
+  {.importcpp: "Grid::Ta(@)", grim.}
 proc tracelessAntihermitianProjection*(src: SiteGaugeFieldF): SiteGaugeFieldF
-  {.importcpp: "Grid::Ta(@)", grid.}
+  {.importcpp: "Grid::Ta(@)", grim.}
 
 #[ read/write facilities ]#
 
 proc coalescedReadGeneralPermute*[V](vec: V; perm: uint8; ndim: int): V
-  {.importcpp: "Grid::coalescedReadGeneralPermute(@)", grid.}
+  {.importcpp: "Grid::coalescedReadGeneralPermute(@)", grim.}
 
 proc coalescedWrite[V](target: V; src: V)
-  {.importcpp: "Grid::coalescedWrite(@)", grid.}
+  {.importcpp: "Grid::coalescedWrite(@)", grim.}
 
 proc coalescedRead[V](vec: V): V
-  {.importcpp: "Grid::coalescedRead(@)", grid.}
+  {.importcpp: "Grid::coalescedRead(@)", grim.}
 
 template `[]`*(view: FieldView; idx: uint64): untyped =
   coalescedRead(view.get(idx))

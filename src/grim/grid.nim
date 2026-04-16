@@ -27,13 +27,15 @@
 ]#
 
 import std/[macros]
+import std/[os]
 
 import utils/[commandline]
 
+const grimDir* = currentSourcePath().parentDir
+
 template header*: untyped =
-  ## Emits the ``{.pragma: grid, header: "<Grid/Grid.h>".}`` pragma so that
-  ## every symbol annotated with ``grid`` pulls in the Grid C++ header.
-  {.pragma: grid, header: "<Grid/Grid.h>".}
+  {.passC: "-I" & grimDir.}
+  {.pragma: grim, header: "grim.h".}
 
 header()
 
@@ -41,26 +43,26 @@ const DefaultPrecision* {.intdefine.} = 64
   ## Default floating-point precision in bits (32 or 64).
   ## Override at compile time with ``-d:DefaultPrecision=32``.
 
-const nd* {.importcpp: "Grid::Nd", grid.} = 4
-const nc* {.importcpp: "Grid::Nc", grid.} = 3
+const nd* {.importcpp: "Grid::Nd", grim.} = 4
+const nc* {.importcpp: "Grid::Nc", grim.} = 3
 
 type
-  Coordinate* {.importcpp: "Grid::Coordinate", grid, bycopy.} = object
+  Coordinate* {.importcpp: "Grid::Coordinate", grim, bycopy.} = object
     ## A Grid coordinate vector (wraps ``std::vector<int>``).
-  Base* {.importcpp: "Grid::GridBase", grid.} = object
+  Base* {.importcpp: "Grid::GridBase", grim.} = object
     ## Abstract base class for all Grid lattice geometries.
-  Cartesian* {.importcpp: "Grid::GridCartesian", grid.} = object
+  Cartesian* {.importcpp: "Grid::GridCartesian", grim.} = object
     ## Full Cartesian lattice geometry.
-  RedBlackCartesian* {.importcpp: "Grid::GridRedBlackCartesian", grid.} = object
+  RedBlackCartesian* {.importcpp: "Grid::GridRedBlackCartesian", grim.} = object
     ## Red-black (checkerboarded) Cartesian lattice geometry.
-  PaddedCell* {.importcpp: "Grid::PaddedCell", grid.} = object
+  PaddedCell* {.importcpp: "Grid::PaddedCell", grim.} = object
     ## A lattice with halo padding for stencil operations.
 
 type
   Grid* = Base | Cartesian | RedBlackCartesian
     ## Type union of all concrete lattice geometries.
 
-type ViewMode* {.importcpp: "Grid::ViewMode", grid, size: sizeof(cint).} = enum
+type ViewMode* {.importcpp: "Grid::ViewMode", grim, size: sizeof(cint).} = enum
   ## Access mode for lattice field views. Controls whether data is
   ## visible on the accelerator (GPU) or the host (CPU) and whether
   ## the view is read-only or writable.
@@ -98,11 +100,13 @@ template viewMode*(access: static Access): ViewMode =
     elif access == Write: HostWrite
     else: HostWrite  # Grid has no HostWriteDiscard; HostWrite is the closest
 
-type RealD* {.importcpp: "Grid::RealD", grid.} = object
-type RealF* {.importcpp: "Grid::RealF", grid.} = object
+type Integer* {.importcpp: "Grid::Integer", grim.} = object
 
-type ComplexD* {.importcpp: "Grid::ComplexD", grid.} = object
-type ComplexF* {.importcpp: "Grid::ComplexF", grid.} = object
+type RealD* {.importcpp: "Grid::RealD", grim.} = object
+type RealF* {.importcpp: "Grid::RealF", grim.} = object
+
+type ComplexD* {.importcpp: "Grid::ComplexD", grim.} = object
+type ComplexF* {.importcpp: "Grid::ComplexF", grim.} = object
 
 when DefaultPrecision == 32:
   type Real* = RealF
@@ -112,12 +116,27 @@ else:
   type Complex* = ComplexD
 
 #[ Grid complex type ]#
+
+proc newInteger*[T](x: T): Integer
+  {.importcpp: "Grid::Integer(@)", constructor, grim.}
   
+proc newComplexF*[T](re: T, im: T): ComplexF
+  {.importcpp: "Grid::ComplexF(@)", constructor, grim.}
+
+proc newComplexD*[T](re: T, im: T): ComplexD
+  {.importcpp: "Grid::ComplexD(@)", constructor, grim.}
+
 proc newComplex*[T](re: T, im: T): Complex
-  {.importcpp: "Grid::Complex(@)", constructor, grid.}
+  {.importcpp: "Grid::Complex(@)", constructor, grim.}
+
+proc newRealF*(x: float): RealF
+  {.importcpp: "Grid::RealF(@)", constructor, grim.}
+
+proc newRealD*(x: float): RealD
+  {.importcpp: "Grid::RealD(@)", constructor, grim.}
 
 proc newReal*(x: float): Real
-  {.importcpp: "Grid::Real(@)", constructor, grid.}
+  {.importcpp: "Grid::Real(@)", constructor, grim.}
 
 proc toComplex*(re: Real): Complex = newComplex(re, newReal(0.0))
 
@@ -125,10 +144,46 @@ proc toComplex*(re: float): Complex = newComplex(newReal(re), newReal(0.0))
 
 proc toComplex*(c: Complex): Complex = c
 
+#[ arithmetic overloads for elementary Grid types ]#
+
+# --- RealD ---
+proc `-`*(a: RealD): RealD {.importcpp: "(-#)", grim.}
+proc `+`*(a, b: RealD): RealD {.importcpp: "(# + #)", grim.}
+proc `-`*(a, b: RealD): RealD {.importcpp: "(# - #)", grim.}
+proc `*`*(a, b: RealD): RealD {.importcpp: "(# * #)", grim.}
+proc `/`*(a, b: RealD): RealD {.importcpp: "(# / #)", grim.}
+
+# --- RealF ---
+proc `-`*(a: RealF): RealF {.importcpp: "(-#)", grim.}
+proc `+`*(a, b: RealF): RealF {.importcpp: "(# + #)", grim.}
+proc `-`*(a, b: RealF): RealF {.importcpp: "(# - #)", grim.}
+proc `*`*(a, b: RealF): RealF {.importcpp: "(# * #)", grim.}
+proc `/`*(a, b: RealF): RealF {.importcpp: "(# / #)", grim.}
+
+# --- ComplexD ---
+proc `-`*(a: ComplexD): ComplexD {.importcpp: "(-#)", grim.}
+proc `+`*(a, b: ComplexD): ComplexD {.importcpp: "(# + #)", grim.}
+proc `-`*(a, b: ComplexD): ComplexD {.importcpp: "(# - #)", grim.}
+proc `*`*(a, b: ComplexD): ComplexD {.importcpp: "(# * #)", grim.}
+proc `/`*(a, b: ComplexD): ComplexD {.importcpp: "(# / #)", grim.}
+
+# --- ComplexF ---
+proc `-`*(a: ComplexF): ComplexF {.importcpp: "(-#)", grim.}
+proc `+`*(a, b: ComplexF): ComplexF {.importcpp: "(# + #)", grim.}
+proc `-`*(a, b: ComplexF): ComplexF {.importcpp: "(# - #)", grim.}
+proc `*`*(a, b: ComplexF): ComplexF {.importcpp: "(# * #)", grim.}
+proc `/`*(a, b: ComplexF): ComplexF {.importcpp: "(# / #)", grim.}
+
+# --- Integer ---
+proc `-`*(a: Integer): Integer {.importcpp: "(-#)", grim.}
+proc `+`*(a, b: Integer): Integer {.importcpp: "(# + #)", grim.}
+proc `-`*(a, b: Integer): Integer {.importcpp: "(# - #)", grim.}
+proc `*`*(a, b: Integer): Integer {.importcpp: "(# * #)", grim.}
+
 #[ initialization/finalization ]#
 
 proc grid_init(argc: ptr cint, argv: ptr cstringArray) 
-  {.importcpp: "Grid::Grid_init(@)", grid.}
+  {.importcpp: "Grid::Grid_init(@)", grim.}
 
 proc gridInit =
   var argc = cargc()
@@ -136,16 +191,16 @@ proc gridInit =
   defer: deallocCStringArray(argv)
   grid_init(addr argc, addr argv)
 
-proc gridFinalize {.importcpp: "Grid::Grid_finalize()", grid.}
+proc gridFinalize {.importcpp: "Grid::Grid_finalize()", grim.}
 
 #[ coordinate facilities ]#
 
 proc initCoordinate(n: cint): Coordinate 
-  {.importcpp: "Grid::Coordinate(@)", grid, constructor.}
+  {.importcpp: "Grid::Coordinate(@)", grim, constructor.}
 
-proc push_back(v: var Coordinate, val: cint) {.importcpp: "#.push_back(@)", grid.}
+proc push_back(v: var Coordinate, val: cint) {.importcpp: "#.push_back(@)", grim.}
 
-proc size(c: Coordinate): cint {.importcpp: "#.size()", grid.}
+proc size(c: Coordinate): cint {.importcpp: "#.size()", grim.}
 
 proc newCoordinate*(args: varargs[int]): Coordinate =
   ## Creates a `Coordinate` from a variadic list of integers.
@@ -168,17 +223,17 @@ proc toShifts*(s: seq[seq[int]]): seq[Coordinate] =
 
 #[ grid cartesian and red-black cartesian facilities ]#
 
-proc numSIMDComplexF*: cint {.importcpp: "Grid::vComplexF::Nsimd()", grid.}
+proc numSIMDComplexF*: cint {.importcpp: "Grid::vComplexF::Nsimd()", grim.}
   ## Returns the number of SIMD lanes for single-precision complex arithmetic.
 
-proc numSIMDComplexD*: cint {.importcpp: "Grid::vComplexD::Nsimd()", grid.}
+proc numSIMDComplexD*: cint {.importcpp: "Grid::vComplexD::Nsimd()", grim.}
   ## Returns the number of SIMD lanes for double-precision complex arithmetic.
 
-proc defaultLatticeLayout*: Coordinate {.importcpp: "Grid::GridDefaultLatt()", grid.}
+proc defaultLatticeLayout*: Coordinate {.importcpp: "Grid::GridDefaultLatt()", grim.}
   ## Returns the default lattice dimensions (set via ``--grid`` on the command line).
 
 proc defaultSIMDLayout*(ndim: cint, nsimd: cint): Coordinate 
-  {.importcpp: "Grid::GridDefaultSimd(@)", grid.}
+  {.importcpp: "Grid::GridDefaultSimd(@)", grim.}
   ## Computes the default SIMD decomposition for `ndim` dimensions
   ## with `nsimd` SIMD lanes.
 
@@ -190,14 +245,14 @@ proc defaultSIMDLayout*(latticeLayout: Coordinate): Coordinate =
     return defaultSIMDLayout(latticeLayout.size(), numSIMDComplexF())
   else: return defaultSIMDLayout(latticeLayout.size(), numSIMDComplexD())
 
-proc defaultMPILayout*: Coordinate {.importcpp: "Grid::GridDefaultMpi()", grid.}
+proc defaultMPILayout*: Coordinate {.importcpp: "Grid::GridDefaultMpi()", grim.}
   ## Returns the default MPI decomposition (set via ``--mpi`` on the command line).
 
 proc newCartesian*(
   latticeLayout: Coordinate, 
   simdLayout: Coordinate, 
   mpiLayout: Coordinate
-): Cartesian {.importcpp: "Grid::GridCartesian(@)", grid, constructor.}
+): Cartesian {.importcpp: "Grid::GridCartesian(@)", grim, constructor.}
   ## Constructs a `Cartesian` grid from explicit lattice, SIMD,
   ## and MPI decomposition vectors.
 
@@ -210,7 +265,7 @@ template newCartesian*: untyped =
   newCartesian(latticeLayout, simdLayout, mpiLayout)
 
 proc newRedBlackCartesian*(grid: ptr Cartesian): RedBlackCartesian 
-  {.importcpp: "Grid::GridRedBlackCartesian(@)", grid, constructor.}
+  {.importcpp: "Grid::GridRedBlackCartesian(@)", grim, constructor.}
   ## Constructs a `RedBlackCartesian` (checkerboard) grid from a pointer to
   ## a `Cartesian` grid.
 
@@ -219,28 +274,28 @@ template newRedBlackCartesian*(grid: var Cartesian): RedBlackCartesian =
   ## `Cartesian` grid.
   newRedBlackCartesian(addr grid)
 
-proc isBoss*(g: ptr Grid): bool {.importcpp: "#->IsBoss()", grid.}
+proc isBoss*(g: ptr Grid): bool {.importcpp: "#->IsBoss()", grim.}
 
 proc isBoss*(g: var Grid): bool = isBoss(addr g)
 
 proc iSites*(grid: Grid): cint 
-  {.importcpp: "#.iSites()", grid.}
+  {.importcpp: "#.iSites()", grim.}
   ## Returns the number of SIMD-inner sites (vector lanes per outer site).
 
 proc oSites*(grid: Grid): cint 
-  {.importcpp: "#.oSites()", grid.}
+  {.importcpp: "#.oSites()", grim.}
   ## Returns the number of SIMD-outer sites (loop iterations on this rank).
 
 proc lSites*(grid: Grid): cint 
-  {.importcpp: "#.lSites()", grid.}
+  {.importcpp: "#.lSites()", grim.}
   ## Returns the total number of local sites on this MPI rank.
 
 proc gSites*(grid: Grid): cint 
-  {.importcpp: "#.gSites()", grid.}
+  {.importcpp: "#.gSites()", grim.}
   ## Returns the total number of global sites across all MPI ranks.
 
 proc numSIMD*(grid: Grid): cint 
-  {.importcpp: "#.Nsimd()", grid.}
+  {.importcpp: "#.Nsimd()", grim.}
   ## Returns the number of SIMD lanes for this grid's precision.
 
 proc sitesCount(grid: ptr Grid; kind: SitesKind): cint =
@@ -255,7 +310,7 @@ proc volume*(grid: ptr Grid): cint = grid.sitesCount(globalSites)
 #[ padded cell facilities ]#
 
 proc newPaddedCell(depth: cint; grid: ptr Cartesian): PaddedCell 
-  {.importcpp: "Grid::PaddedCell(@)", grid, constructor.}
+  {.importcpp: "Grid::PaddedCell(@)", grim, constructor.}
 
 template newPaddedCell*(grid: var Cartesian; depth: int = 1): untyped =
   ## Creates a `PaddedCell` around `grid` with the given halo `depth`
@@ -267,7 +322,7 @@ template newPaddedCell*(grid: ptr Cartesian; depth: int = 1): untyped =
   newPaddedCell(cint(depth), grid)
 
 proc newPaddedGrid(cell: PaddedCell): ptr Cartesian 
-  {.importcpp: "#.grids.back()", grid.}
+  {.importcpp: "#.grids.back()", grim.}
 
 template paddedGrid*(cell: PaddedCell): untyped =
   ## Returns a pointer to the padded `Cartesian` grid (the largest
@@ -276,7 +331,7 @@ template paddedGrid*(cell: PaddedCell): untyped =
 
 #[ printing facilities ]#
 
-proc myRank*: int {.importcpp: "Grid::CartesianCommunicator::RankWorld()", grid.}
+proc myRank*: int {.importcpp: "Grid::CartesianCommunicator::RankWorld()", grim.}
   ## Returns this process's MPI world rank (0-based).
 
 macro grimPrint(args: varargs[untyped]): untyped =
@@ -290,10 +345,10 @@ macro grimPrint(args: varargs[untyped]): untyped =
 
 #[ Grid real/complex ]#
 
-proc re*(z: ComplexD): float64 {.importcpp: "#.real()", grid.}
-proc im*(z: ComplexD): float64 {.importcpp: "#.imag()", grid.}
-proc re*(z: ComplexF): float32 {.importcpp: "#.real()", grid.}
-proc im*(z: ComplexF): float32 {.importcpp: "#.imag()", grid.}
+proc re*(z: ComplexD): float64 {.importcpp: "#.real()", grim.}
+proc im*(z: ComplexD): float64 {.importcpp: "#.imag()", grim.}
+proc re*(z: ComplexF): float32 {.importcpp: "#.real()", grim.}
+proc im*(z: ComplexF): float32 {.importcpp: "#.imag()", grim.}
 
 #[ main API ]#
 

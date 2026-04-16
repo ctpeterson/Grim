@@ -29,6 +29,8 @@
 import cpp
 import grid
 
+import conjugategradient
+
 import types/[field]
 
 header()
@@ -44,8 +46,11 @@ else:
 
 const schurStaggered = "Grid::SchurStaggeredOperator<" & staggered & ", " & bosonCpp & ">"
 const schurImprovedStaggered = "Grid::SchurStaggeredOperator<" & improved & ", " & bosonCpp & ">"
+const staggeredCG = "Grid::ConjugateGradient<" & bosonCpp & ">"
 
-type StaggeredImplParams {.importcpp: "Grid::StaggeredImplParams", grid.} = object
+const schurSolveStag = "Grid::SchurRedBlackStaggeredSolve<" & bosonCpp & ">"
+
+type StaggeredImplParams {.importcpp: "Grid::StaggeredImplParams", grim.} = object
 
 type StaggeredContext* = object
   impl*: StaggeredImplParams
@@ -54,19 +59,36 @@ type StaggeredContext* = object
   u0*: float
 
 type 
-  StaggeredOperator* {.importcpp: staggered, grid.} = object
-  ImprovedStaggeredOperator* {.importcpp: improved, grid.} = object
-  SchurStaggered* {.importcpp: schurStaggered, grid.} = object
-  SchurImprovedStaggered* {.importcpp: schurImprovedStaggered, grid.} = object
+  StaggeredOperator* {.importcpp: "Holder<" & staggered & ">", grim.} = object
+  ImprovedStaggeredOperator* {.importcpp: "Holder<" & improved & ">", grim.} = object
+  SchurStaggered* {.importcpp: "Holder<" & schurStaggered & ">", grim.} = object
+  SchurImprovedStaggered* {.importcpp: "Holder<" & schurImprovedStaggered & ">", grim.} = object
+  StaggeredConjugateGradient* {.importcpp: "Holder<" & staggeredCG & ">", grim.} = object
 
-type SchurStaggeredOperator* = SchurStaggered | SchurImprovedStaggered
+  InverseStaggered* = ref object
+    cg*: StaggeredConjugateGradient
+    op*: StaggeredOperator
+  InverseImprovedStaggered* = ref object
+    cg*: StaggeredConjugateGradient
+    op*: ImprovedStaggeredOperator
+  InverseSchurStaggered* = ref object
+    cg*: StaggeredConjugateGradient
+    op*: SchurStaggered
+  InverseSchurImprovedStaggered* = ref object
+    cg*: StaggeredConjugateGradient
+    op*: SchurImprovedStaggered
+
+type 
+  SchurStaggeredOperator* = SchurStaggered | SchurImprovedStaggered
+  InverseStaggeredOperator* = InverseStaggered | InverseImprovedStaggered
+  InverseSchurStaggeredOperator* = InverseSchurStaggered | InverseSchurImprovedStaggered
 
 # vvvvv after Curtis' PR vvvvv
 #proc newStaggeredImplParams(boundaryConditions: Vector[Complex]): StaggeredImplParams 
-#  {.importcpp: "StaggeredImplParams(@)", constructor, grid.}
+#  {.importcpp: "StaggeredImplParams(@)", constructor, grim.}
 
 proc newStaggeredImplParams: StaggeredImplParams 
-  {.importcpp: "Grid::StaggeredImplParams", constructor, grid.}
+  {.importcpp: "Grid::StaggeredImplParams", constructor, grim.}
 
 proc defaultBoundaryConditions: seq[Complex] = 
   result = newSeq[Complex](nd)
@@ -108,7 +130,7 @@ proc newStaggeredOperator(
   c1: RealD,
   u0: RealD,
   impl: StaggeredImplParams
-): StaggeredOperator {.importcpp: staggered & "(@)", constructor, grid.}
+): StaggeredOperator {.importcpp: "Holder<" & staggered & ">(@)", constructor, grim.}
 
 template newStaggeredOperator*(
   ctx: StaggeredContext,
@@ -124,21 +146,29 @@ template newStaggeredOperator*(
     ctx.impl
   )
 
-proc setGauge*(stag: var StaggeredOperator; u: GaugeField) 
-  {.importcpp: "#.ImportGauge(gd(#))", grid.}
+proc redBlackBase*(stag: StaggeredOperator): ptr Base
+  {.importcpp: "gd(#).RedBlackGrid()", grim.}
 
-proc apply*(stag: var StaggeredOperator; phi, psi: BosonField) 
-  {.importcpp: "#.M(gd(#), gd(#))", grid.}
+proc setGauge*(stag: StaggeredOperator; u: GaugeField) 
+  {.importcpp: "gd(#).ImportGauge(gd(#))", grim.}
 
-proc apply*(stag: var StaggeredOperator; phi: BosonField): BosonField =
+proc getMass*(stag: StaggeredOperator): RealD
+  {.importcpp: "gd(#).mass", grim.}
+proc setMass*(stag: StaggeredOperator; m: RealD)
+  {.importcpp: "gd(#).mass = #", grim.}
+
+proc apply*(stag: StaggeredOperator; phi, psi: BosonField) 
+  {.importcpp: "gd(#).M(gd(#), gd(#))", grim.}
+
+proc apply*(stag: StaggeredOperator; phi: BosonField): BosonField =
   var grid = phi.base()
   result = grid.newBosonField()
   apply(stag, phi, result)
 
-proc applyDagger*(stag: var StaggeredOperator; phi, psi: BosonField) 
-  {.importcpp: "#.Mdag(gd(#), gd(#))", grid.}
+proc applyDagger*(stag: StaggeredOperator; phi, psi: BosonField) 
+  {.importcpp: "gd(#).Mdag(gd(#), gd(#))", grim.}
 
-proc applyDagger*(stag: var StaggeredOperator; phi: BosonField): BosonField =
+proc applyDagger*(stag: StaggeredOperator; phi: BosonField): BosonField =
   var grid = phi.base()
   result = grid.newBosonField()
   applyDagger(stag, phi, result)
@@ -153,7 +183,7 @@ proc newImprovedStaggeredOperator(
   c2: RealD,
   u0: RealD,
   impl: StaggeredImplParams
-): ImprovedStaggeredOperator {.importcpp: improved & "(@)", constructor, grid.}
+): ImprovedStaggeredOperator {.importcpp: "Holder<" & improved & ">(@)", constructor, grim.}
 
 template newImprovedStaggeredOperator*(
   ctx: StaggeredContext,
@@ -170,59 +200,229 @@ template newImprovedStaggeredOperator*(
     ctx.impl
   )
 
-proc setGauge*(stag: var ImprovedStaggeredOperator; u, ul: GaugeField) 
-  {.importcpp: "#.ImportGauge(gd(#), gd(#))", grid.}
+proc redBlackBase*(stag: ImprovedStaggeredOperator): ptr Base
+  {.importcpp: "gd(#).RedBlackGrid()", grim.}
 
-proc apply*(stag: var ImprovedStaggeredOperator; phi, psi: BosonField) 
-  {.importcpp: "#.M(gd(#), gd(#))", grid.}
+proc setGauge*(stag: ImprovedStaggeredOperator; u, ul: GaugeField) 
+  {.importcpp: "gd(#).ImportGauge(gd(#), gd(#))", grim.}
 
-proc apply*(stag: var ImprovedStaggeredOperator; phi: BosonField): BosonField =
+proc getMass*(stag: ImprovedStaggeredOperator): RealD
+  {.importcpp: "gd(#).mass", grim.}
+proc setMass*(stag: ImprovedStaggeredOperator; m: RealD)
+  {.importcpp: "gd(#).mass = #", grim.}
+
+proc apply*(stag: ImprovedStaggeredOperator; phi: BosonField; psi: var BosonField) 
+  {.importcpp: "gd(#).M(gd(#), gd(#))", grim.}
+
+proc apply*(stag: ImprovedStaggeredOperator; phi: BosonField): BosonField =
   var grid = phi.base()
   result = grid.newBosonField()
+  result.zero()
   apply(stag, phi, result)
 
-proc applyDagger*(stag: var ImprovedStaggeredOperator; phi, psi: BosonField) 
-  {.importcpp: "#.Mdag(gd(#), gd(#))", grid.}
+proc applyDagger*(stag: ImprovedStaggeredOperator; phi: BosonField; psi: var BosonField) 
+  {.importcpp: "gd(#).Mdag(gd(#), gd(#))", grim.}
 
-proc applyDagger*(stag: var ImprovedStaggeredOperator; phi: BosonField): BosonField =
+proc applyDagger*(stag: ImprovedStaggeredOperator; phi: BosonField): BosonField =
   var grid = phi.base()
   result = grid.newBosonField()
+  result.zero()
   applyDagger(stag, phi, result)
 
 #[ Schur even-odd preconditioned staggered operators ]#
 
-proc newSchurStaggered(stag: var StaggeredOperator): SchurStaggered
-  {.importcpp: schurStaggered & "(@)", constructor, grid.}
+proc newSchurStaggered(stag: StaggeredOperator): SchurStaggered
+  {.importcpp: "Holder<" & schurStaggered & ">(gd(#))", grim.}
 
 proc newSchurImprovedStaggered(
-  stag: var ImprovedStaggeredOperator
+  stag: ImprovedStaggeredOperator
 ): SchurImprovedStaggered
-  {.importcpp: schurImprovedStaggered & "(@)", constructor, grid.}
+  {.importcpp: "Holder<" & schurImprovedStaggered & ">(gd(#))", grim.}
 
-template newSchurOperator*(stag: var StaggeredOperator): untyped =
+template newSchurOperator*(stag: StaggeredOperator): untyped =
   newSchurStaggered(stag)
 
-template newSchurOperator*(stag: var ImprovedStaggeredOperator): untyped =
+template newSchurOperator*(stag: ImprovedStaggeredOperator): untyped =
   newSchurImprovedStaggered(stag)
 
-proc apply*(op: var SchurStaggeredOperator; src, dst: BosonField)
-  {.importcpp: "#.Mpc(gd(#), gd(#))", grid.}
+proc apply*(op: SchurStaggeredOperator; src: BosonField; dst: var BosonField)
+  {.importcpp: "gd(#).Mpc(gd(#), gd(#))", grim.}
 
-proc apply*(op: var SchurStaggeredOperator; src: BosonField): BosonField =
+proc apply*(op: SchurStaggeredOperator; src: BosonField): BosonField =
   var grid = src.base()
   result = grid.newBosonField()
+  result.zero()
   apply(op, src, result)
 
-proc applyDagger*(op: var SchurStaggeredOperator; src, dst: BosonField)
-  {.importcpp: "#.MpcDag(gd(#), gd(#))", grid.}
+proc applyDagger*(op: SchurStaggeredOperator; src: BosonField; dst: var BosonField)
+  {.importcpp: "gd(#).MpcDag(gd(#), gd(#))", grim.}
 
-proc applyDagger*(op: var SchurStaggeredOperator; src: BosonField): BosonField =
+proc applyDagger*(op: SchurStaggeredOperator; src: BosonField): BosonField =
   var grid = src.base()
   result = grid.newBosonField()
+  result.zero()
   applyDagger(op, src, result)
 
+#[ inverse staggered operator ]#
+
+proc newStaggeredConjugateGradient(
+  tolerance: RealD,
+  maximumIterations: Integer,
+  errorOnNoConvergence: bool
+): StaggeredConjugateGradient
+  {.importcpp: "Holder<" & staggeredCG & ">(@)", constructor, grim.}
+
+proc apply(
+  cg: StaggeredConjugateGradient; 
+  op: SchurStaggered; 
+  src, dst: BosonField
+) {.importcpp: "gd(#)(gd(#), gd(#), gd(#))", grim.}
+
+proc apply(
+  cg: StaggeredConjugateGradient; 
+  op: SchurImprovedStaggered; 
+  src, dst: BosonField
+) {.importcpp: "gd(#)(gd(#), gd(#), gd(#))", grim.}
+
+template newInverseOperator*(
+  cg: ConjugateGradient; 
+  opIn: StaggeredOperator
+): untyped =
+  block:
+    var r: InverseStaggered
+    new(r)
+    r.cg = newStaggeredConjugateGradient(
+      newRealD(cg.tolerance), 
+      newInteger(cg.maximumIterations), 
+      cg.errorOnNoConvergence
+    )
+    r.op = opIn
+    r
+
+template newInverseOperator*(
+  cg: ConjugateGradient; 
+  opIn: ImprovedStaggeredOperator
+): untyped =
+  block:
+    var r: InverseImprovedStaggered
+    new(r)
+    r.cg = newStaggeredConjugateGradient(
+      newRealD(cg.tolerance), 
+      newInteger(cg.maximumIterations), 
+      cg.errorOnNoConvergence
+    )
+    r.op = opIn
+    r
+
+template newInverseOperator*(
+  cg: ConjugateGradient;
+  opIn: SchurStaggered
+): untyped =
+  block:
+    var r: InverseSchurStaggered
+    new(r)
+    r.cg = newStaggeredConjugateGradient(
+      newRealD(cg.tolerance),
+      newInteger(cg.maximumIterations),
+      cg.errorOnNoConvergence
+    )
+    r.op = opIn
+    r
+
+template newInverseOperator*(
+  cg: ConjugateGradient;
+  opIn: SchurImprovedStaggered
+): untyped =
+  block:
+    var r: InverseSchurImprovedStaggered
+    new(r)
+    r.cg = newStaggeredConjugateGradient(
+      newRealD(cg.tolerance),
+      newInteger(cg.maximumIterations),
+      cg.errorOnNoConvergence
+    )
+    r.op = opIn
+    r
+
+proc schurSolve(
+  cg: StaggeredConjugateGradient; 
+  op: StaggeredOperator;
+  src, dst: BosonField
+) {.importcpp: schurSolveStag & "(gd(#))(gd(#), gd(#), gd(#))", grim.}
+
+proc schurSolve(
+  cg: StaggeredConjugateGradient; 
+  op: ImprovedStaggeredOperator;
+  src, dst: BosonField
+) {.importcpp: schurSolveStag & "(gd(#))(gd(#), gd(#), gd(#))", grim.}
+
+proc apply*(inv: InverseStaggeredOperator; src: BosonField; dst: var BosonField) =
+  schurSolve(inv.cg, inv.op, src, dst)
+
+proc apply*(inv: InverseStaggeredOperator; src: BosonField): BosonField =
+  var grid = src.base()
+  result = grid.newBosonField()
+  result.zero()
+  apply(inv, src, result)
+
+proc applyDagger*(inv: InverseStaggeredOperator; src: BosonField; dst: var BosonField) =
+  # Mdag(m) = -M(-m) for the staggered Dirac operators
+  let m = inv.op.getMass()
+  inv.op.setMass(-m)
+  schurSolve(inv.cg, inv.op, src, dst)
+  inv.op.setMass(m)
+  dst = -dst
+
+proc applyDagger*(inv: InverseStaggeredOperator; src: BosonField): BosonField =
+  var grid = src.base()
+  result = grid.newBosonField()
+  result.zero()
+  applyDagger(inv, src, result)
+
+#[ inverse Schur preconditioned staggered operator ]#
+
+proc apply*(inv: InverseSchurStaggeredOperator; src: BosonField; dst: var BosonField) =
+  apply(inv.cg, inv.op, src, dst)
+
+proc apply*(inv: InverseSchurStaggeredOperator; src: BosonField): BosonField =
+  var grid = src.base()
+  result = grid.newBosonField()
+  result.zero()
+  apply(inv, src, result)
+
+proc applyDagger*(inv: InverseSchurStaggeredOperator; src: BosonField; dst: var BosonField) =
+  # CG solves (Mpc†Mpc) x = src, which is Hermitian, so dagger = forward
+  apply(inv, src, dst)
+
+proc applyDagger*(inv: InverseSchurStaggeredOperator; src: BosonField): BosonField =
+  var grid = src.base()
+  result = grid.newBosonField()
+  result.zero()
+  applyDagger(inv, src, result)
+
 when isMainModule:
+  import types/[rng]
+
+  const tol = 1e-6
+
+  proc `~=`(a, b: float64): bool =
+    let scale = max(abs(a), max(abs(b), 1.0))
+    abs(a - b) < tol * scale
+
+  proc pass(name: string) = print "  [PASS]", name
+  proc fail(name: string; msg: string = "") =
+    print "  [FAIL]", name, msg
+    quit(1)
+
+  template test(name: string; body: untyped) =
+    block:
+      body
+      pass(name)
+
   grid:
+    print "===== staggered.nim unit tests ====="
+
+    # ── setup ────────────────────────────────────────────────────────────
     var grid = newCartesian()
     var rbgrid = newRedBlackCartesian(grid)
     let mass = 0.1
@@ -233,28 +433,188 @@ when isMainModule:
     var ul = grid.newGaugeField()
     var phi = grid.newBosonField()
     var psi = grid.newBosonField()
-    
+    var prng = grid.newParallelRNG()
+
+    prng.seed(123456789)
+    prng.gaussian(phi)
+    prng.tepid(u)
+    prng.tepid(ul)
+
     stag1.setGauge(u)
     stag3.setGauge(u, ul)
 
-    stag1.apply(phi, psi)
-    psi = stag1.apply(phi)
+    # ── 1. naive staggered M ─────────────────────────────────────────────
+    test "naive M (two-arg)":
+      stag1.apply(phi, psi)
+      assert squareNorm2(psi) > 0.0
 
-    stag1.applyDagger(phi, psi)
-    psi = stag1.applyDagger(phi)
+    test "naive M (one-arg)":
+      psi = stag1.apply(phi)
+      assert squareNorm2(psi) > 0.0
 
-    stag3.apply(phi, psi)
-    psi = stag3.apply(phi)
+    # ── 2. naive staggered Mdag ──────────────────────────────────────────
+    test "naive Mdag (two-arg)":
+      stag1.applyDagger(phi, psi)
+      assert squareNorm2(psi) > 0.0
 
-    stag3.applyDagger(phi, psi)
-    psi = stag3.applyDagger(phi)
+    test "naive Mdag (one-arg)":
+      psi = stag1.applyDagger(phi)
+      assert squareNorm2(psi) > 0.0
 
-    var schur1 = newSchurOperator(stag1)
-    var rbphi = rbgrid.newBosonField()
-    var rbpsi = rbgrid.newBosonField()
-    schur1.apply(rbphi, rbpsi)
-    schur1.applyDagger(rbphi, rbpsi)
+    # ── 3. improved staggered M ──────────────────────────────────────────
+    test "improved M (two-arg)":
+      stag3.apply(phi, psi)
+      assert squareNorm2(psi) > 0.0
 
-    var schur3 = newSchurOperator(stag3)
-    schur3.apply(rbphi, rbpsi)
-    schur3.applyDagger(rbphi, rbpsi)
+    test "improved M (one-arg)":
+      psi = stag3.apply(phi)
+      assert squareNorm2(psi) > 0.0
+
+    # ── 4. improved staggered Mdag ───────────────────────────────────────
+    test "improved Mdag (two-arg)":
+      stag3.applyDagger(phi, psi)
+      assert squareNorm2(psi) > 0.0
+
+    test "improved Mdag (one-arg)":
+      psi = stag3.applyDagger(phi)
+      assert squareNorm2(psi) > 0.0
+
+    # ── 5. Schur preconditioned operators ────────────────────────────────
+    test "Schur naive Mpc":
+      var schur1 = newSchurOperator(stag1)
+      var rbphi = rbgrid.newBosonField()
+      var rbpsi = rbgrid.newBosonField()
+      prng.gaussian(rbphi)
+      schur1.apply(rbphi, rbpsi)
+      assert squareNorm2(rbpsi) > 0.0
+
+    test "Schur naive MpcDag":
+      var schur1 = newSchurOperator(stag1)
+      var rbphi = rbgrid.newBosonField()
+      var rbpsi = rbgrid.newBosonField()
+      prng.gaussian(rbphi)
+      schur1.applyDagger(rbphi, rbpsi)
+      assert squareNorm2(rbpsi) > 0.0
+
+    test "Schur improved Mpc":
+      var schur3 = newSchurOperator(stag3)
+      var rbphi = rbgrid.newBosonField()
+      var rbpsi = rbgrid.newBosonField()
+      prng.gaussian(rbphi)
+      schur3.apply(rbphi, rbpsi)
+      assert squareNorm2(rbpsi) > 0.0
+
+    test "Schur improved MpcDag":
+      var schur3 = newSchurOperator(stag3)
+      var rbphi = rbgrid.newBosonField()
+      var rbpsi = rbgrid.newBosonField()
+      prng.gaussian(rbphi)
+      schur3.applyDagger(rbphi, rbpsi)
+      assert squareNorm2(rbpsi) > 0.0
+
+    # ── 6. inverse (CG) operators ────────────────────────────────────────
+    test "inverse naive apply":
+      var cg = newConjugateGradient(1e-10, 100000)
+      var inv1 = cg.newInverseOperator(stag1)
+      psi = inv1.apply(phi)
+      assert squareNorm2(psi) > 0.0
+
+    test "inverse naive apply (two-arg)":
+      var cg = newConjugateGradient(1e-10, 100000)
+      var inv1 = cg.newInverseOperator(stag1)
+      inv1.apply(phi, psi)
+      assert squareNorm2(psi) > 0.0
+
+    test "inverse improved applyDagger":
+      var cg = newConjugateGradient(1e-10, 100000)
+      var inv3 = cg.newInverseOperator(stag3)
+      psi = inv3.applyDagger(phi)
+      assert squareNorm2(psi) > 0.0
+
+    # ── 7. M * M^-1 consistency ──────────────────────────────────────────
+    test "naive M * M^-1 ~ identity":
+      var cg = newConjugateGradient(1e-10, 100000)
+      var inv1 = cg.newInverseOperator(stag1)
+      let invPhi = inv1.apply(phi)
+      let roundtrip = stag1.apply(invPhi)
+      let diff = phi - roundtrip
+      let relErr = squareNorm2(diff) / squareNorm2(phi)
+      assert relErr < 1e-8
+
+    test "improved M * M^-1 ~ identity":
+      var cg = newConjugateGradient(1e-10, 100000)
+      var inv3 = cg.newInverseOperator(stag3)
+      let invPhi = inv3.apply(phi)
+      let roundtrip = stag3.apply(invPhi)
+      let diff = phi - roundtrip
+      let relErr = squareNorm2(diff) / squareNorm2(phi)
+      assert relErr < 1e-8
+
+    # ── 8. Mdag * Mdag^-1 consistency ────────────────────────────────────
+    test "naive Mdag * Mdag^-1 ~ identity":
+      var cg = newConjugateGradient(1e-10, 100000)
+      var inv1 = cg.newInverseOperator(stag1)
+      let invPhi = inv1.applyDagger(phi)
+      let roundtrip = stag1.applyDagger(invPhi)
+      let diff = phi - roundtrip
+      let relErr = squareNorm2(diff) / squareNorm2(phi)
+      assert relErr < 1e-8
+
+    test "improved Mdag * Mdag^-1 ~ identity":
+      var cg = newConjugateGradient(1e-10, 100000)
+      var inv3 = cg.newInverseOperator(stag3)
+      let invPhi = inv3.applyDagger(phi)
+      let roundtrip = stag3.applyDagger(invPhi)
+      let diff = phi - roundtrip
+      let relErr = squareNorm2(diff) / squareNorm2(phi)
+      assert relErr < 1e-8
+
+    # ── 9. inverse Schur operators ───────────────────────────────────────
+    test "inverse Schur naive apply":
+      var schur1 = newSchurOperator(stag1)
+      var cg = newConjugateGradient(1e-10, 100000)
+      var inv1 = cg.newInverseOperator(schur1)
+      var rbphi = rbgrid.newBosonField()
+      var rbpsi = rbgrid.newBosonField()
+      prng.gaussian(rbphi)
+      rbpsi = inv1.apply(rbphi)
+      assert squareNorm2(rbpsi) > 0.0
+
+    test "inverse Schur improved apply":
+      var schur3 = newSchurOperator(stag3)
+      var cg = newConjugateGradient(1e-10, 100000)
+      var inv3 = cg.newInverseOperator(schur3)
+      var rbphi = rbgrid.newBosonField()
+      var rbpsi = rbgrid.newBosonField()
+      prng.gaussian(rbphi)
+      rbpsi = inv3.apply(rbphi)
+      assert squareNorm2(rbpsi) > 0.0
+
+    # ── 10. Schur Mpc * Mpc^-1 consistency ─────────────────────────────
+    test "Schur naive Mpc roundtrip ~ identity":
+      var schur1 = newSchurOperator(stag1)
+      var cg = newConjugateGradient(1e-10, 100000)
+      var inv1 = cg.newInverseOperator(schur1)
+      var rbphi = rbgrid.newBosonField()
+      prng.gaussian(rbphi)
+      let invPhi = inv1.apply(rbphi)
+      var roundtrip = rbgrid.newBosonField()
+      schur1.apply(invPhi, roundtrip)
+      let diff = rbphi - roundtrip
+      let relErr = squareNorm2(diff) / squareNorm2(rbphi)
+      assert relErr < 1e-8
+
+    test "Schur improved Mpc roundtrip ~ identity":
+      var schur3 = newSchurOperator(stag3)
+      var cg = newConjugateGradient(1e-10, 100000)
+      var inv3 = cg.newInverseOperator(schur3)
+      var rbphi = rbgrid.newBosonField()
+      prng.gaussian(rbphi)
+      let invPhi = inv3.apply(rbphi)
+      var roundtrip = rbgrid.newBosonField()
+      schur3.apply(invPhi, roundtrip)
+      let diff = rbphi - roundtrip
+      let relErr = squareNorm2(diff) / squareNorm2(rbphi)
+      assert relErr < 1e-8
+
+    print "===== all staggered tests passed ====="

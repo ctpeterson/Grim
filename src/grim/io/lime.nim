@@ -34,28 +34,28 @@ import types/[rng]
 
 header()
 
-type Header* {.importcpp: "Grid::FieldMetaData", grid.} = object
+type Header* {.importcpp: "Grid::FieldMetaData", grim.} = object
   ## Grid field metadata (dimensions, plaquette, checksums, etc.)
 
-type Record* {.importcpp: "Grid::scidacRecord", grid.} = object
+type Record* {.importcpp: "Grid::scidacRecord", grim.} = object
   ## SciDAC private record metadata
 
-type LimeReader* {.importcpp: "Grid::GridLimeReader", grid.} = object
+type LimeReader* {.importcpp: "Grid::GridLimeReader", grim.} = object
   ## Low-level LIME reader
 
-type LimeWriter* {.importcpp: "Grid::GridLimeWriter", grid.} = object
+type LimeWriter* {.importcpp: "Grid::GridLimeWriter", grim.} = object
   ## Low-level LIME writer
 
-type SciDACReader* {.importcpp: "Grid::ScidacReader", grid.} = object
+type SciDACReader* {.importcpp: "Grid::ScidacReader", grim.} = object
   ## SciDAC field reader
 
-type SciDACWriter* {.importcpp: "Grid::ScidacWriter", grid.} = object
+type SciDACWriter* {.importcpp: "Grid::ScidacWriter", grim.} = object
   ## SciDAC field writer
 
-type ILDGReader* {.importcpp: "Grid::IldgReader", grid.} = object
+type ILDGReader* {.importcpp: "Grid::IldgReader", grim.} = object
   ## ILDG field reader
 
-type ILDGWriter* {.importcpp: "Grid::IldgWriter", grid.} = object
+type ILDGWriter* {.importcpp: "Grid::IldgWriter", grim.} = object
   ## ILDG field writer
 
 const
@@ -72,23 +72,23 @@ const
 
 #[ header/record specification ]#
 
-proc newHeader*: Header {.importcpp: "Grid::FieldMetaData()", grid, constructor.}
+proc newHeader*: Header {.importcpp: "Grid::FieldMetaData()", grim, constructor.}
 
-proc newRecord*: Record {.importcpp: "Grid::scidacRecord()", grid, constructor.}
+proc newRecord*: Record {.importcpp: "Grid::scidacRecord()", grim, constructor.}
 
 #[ LIME read facilities ]#
 
 proc newLimeReader*: LimeReader
-  {.importcpp: "Grid::GridLimeReader()", grid, constructor.}
+  {.importcpp: "Grid::GridLimeReader()", grim, constructor.}
 
 proc open*(r: var LimeReader; filename: cstring)
-  {.importcpp: "#.open(std::string(#))", grid.}
+  {.importcpp: "#.open(std::string(#))", grim.}
 
 proc close*(r: var LimeReader)
-  {.importcpp: "#.close()", grid.}
+  {.importcpp: "#.close()", grim.}
 
 proc readConfigurationImpl(r: var LimeReader; field: var Field; recordName: cstring)
-  {.importcpp: "#.readLimeLatticeBinaryObject(gd(#), std::string(#))", grid.}
+  {.importcpp: "#.readLimeLatticeBinaryObject(gd(#), std::string(#))", grim.}
 
 proc readConfiguration*(
   r: var LimeReader; 
@@ -105,7 +105,7 @@ proc readObjectImpl(
   r: var LimeReader; 
   xmlstring: var CppString;
   recordName: cstring
-) {.importcpp: "#.readLimeObject(#, std::string(#))", grid.}
+) {.importcpp: "#.readLimeObject(#, std::string(#))", grim.}
 
 proc readObject*(r: var LimeReader; recordName: string): string =
   var s: CppString
@@ -115,7 +115,7 @@ proc readObject*(r: var LimeReader; recordName: string): string =
 #[ LIME write facilities ]#
 
 proc newLimeWriterImpl(isBoss: bool): LimeWriter
-  {.importcpp: "Grid::GridLimeWriter(#)", grid, constructor.}
+  {.importcpp: "Grid::GridLimeWriter(#)", grim, constructor.}
 
 proc newLimeWriter*(grid: ptr Grid): LimeWriter =
   newLimeWriterImpl(grid.isBoss())
@@ -124,13 +124,13 @@ proc newLimeWriter*(grid: var Grid): LimeWriter =
   newLimeWriterImpl(addr(grid).isBoss())
 
 proc open*(w: var LimeWriter; filename: cstring)
-  {.importcpp: "#.open(std::string(#))", grid.}
+  {.importcpp: "#.open(std::string(#))", grim.}
 
 proc close*(w: var LimeWriter)
-  {.importcpp: "#.close()", grid.}
+  {.importcpp: "#.close()", grim.}
 
 proc writeConfigurationImpl(w: var LimeWriter; field: var Field; recordName: cstring)
-  {.importcpp: "#.writeLimeLatticeBinaryObject(gd(#), std::string(#))", grid.}
+  {.importcpp: "#.writeLimeLatticeBinaryObject(gd(#), std::string(#))", grim.}
 
 proc writeConfiguration*(
   w: var LimeWriter; 
@@ -152,7 +152,7 @@ proc writeObjectImpl(
   mb, me: cint; 
   obj: var Header;
   objectName, recordName: cstring
-){.importcpp: "#.writeLimeObject(#, #, #, std::string(#), std::string(#))", grid.}
+){.importcpp: "#.writeLimeObject(#, #, #, std::string(#), std::string(#))", grim.}
 
 proc writeObject*(
   w: var LimeWriter; 
@@ -166,7 +166,7 @@ proc writeObjectImpl(
   mb, me: cint; 
   obj: var Record;
   objectName, recordName: cstring
-) {.importcpp: "#.writeLimeObject(#, #, #, std::string(#), std::string(#))", grid.}
+) {.importcpp: "#.writeLimeObject(#, #, #, std::string(#), std::string(#))", grim.}
 
 proc writeObject*(
   w: var LimeWriter; 
@@ -195,7 +195,7 @@ proc readRNGImpl(
   filename: cstring;
   offset: uint64;
   nerscCsum, scidacCsumA, scidacCsumB: var uint32
-) {.importcpp: "Grid::BinaryIO::readRNG(#, #, std::string(#), #, #, #, #)", grid.}
+) {.importcpp: "Grid::BinaryIO::readRNG(#, #, std::string(#), #, #, #, #)", grim.}
 
 proc readRNG*(
   serial: var SerialRNG;
@@ -220,7 +220,7 @@ proc writeRNGImpl(
   filename: cstring;
   offset: uint64;
   nerscCsum, scidacCsumA, scidacCsumB: var uint32
-) {.importcpp: "Grid::BinaryIO::writeRNG(#, #, std::string(#), #, #, #, #)", grid.}
+) {.importcpp: "Grid::BinaryIO::writeRNG(#, #, std::string(#), #, #, #, #)", grim.}
 
 proc writeRNG*(
   serial: var SerialRNG;
@@ -242,16 +242,16 @@ proc writeRNG*(
 #[ SciDAC read facilities ]#
 
 proc newSciDACReader*: SciDACReader 
-  {.importcpp: "Grid::ScidacReader()", grid, constructor.}
+  {.importcpp: "Grid::ScidacReader()", grim, constructor.}
 
 proc open*(r: var SciDACReader; filename: cstring) 
-  {.importcpp: "#.open(std::string(#))", grid.}
+  {.importcpp: "#.open(std::string(#))", grim.}
 
 proc close*(r: var SciDACReader) 
-  {.importcpp: "#.close()", grid.}
+  {.importcpp: "#.close()", grim.}
 
 proc readScidacFieldRecord*(r: var SciDACReader; field: var Field; record: var Record) 
-  {.importcpp: "#.readScidacFieldRecord(gd(#), #)", grid.}
+  {.importcpp: "#.readScidacFieldRecord(gd(#), #)", grim.}
 
 proc readScidacFieldRecord*(r: var SciDACReader; field: var Field) =
   var record = newRecord()
@@ -260,7 +260,7 @@ proc readScidacFieldRecord*(r: var SciDACReader; field: var Field) =
 #[ SciDAC write facilities ]#
 
 proc newSciDACWriterImpl(isBoss: bool): SciDACWriter 
-  {.importcpp: "Grid::ScidacWriter(#)", grid, constructor.}
+  {.importcpp: "Grid::ScidacWriter(#)", grim, constructor.}
 
 proc newSciDACWriter*(grid: ptr Grid): SciDACWriter =
   newSciDACWriterImpl(grid.isBoss())
@@ -269,13 +269,13 @@ proc newSciDACWriter*(grid: var Grid): SciDACWriter =
   newSciDACWriterImpl(addr(grid).isBoss())
 
 proc open*(w: var SciDACWriter; filename: cstring) 
-  {.importcpp: "#.open(std::string(#))", grid.}
+  {.importcpp: "#.open(std::string(#))", grim.}
 
 proc close*(w: var SciDACWriter) 
-  {.importcpp: "#.close()", grid.}
+  {.importcpp: "#.close()", grim.}
 
 proc writeScidacFieldRecord*(w: var SciDACWriter; field: var Field; record: Record) 
-  {.importcpp: "#.writeScidacFieldRecord(gd(#), #)", grid.}
+  {.importcpp: "#.writeScidacFieldRecord(gd(#), #)", grim.}
 
 proc writeScidacFieldRecord*(w: var SciDACWriter; field: var Field) =
   let record = newRecord()
@@ -305,15 +305,15 @@ proc writeScidacConfiguration*(field: var Field; filename: string) =
 
 #[ ILDG read facilities ]#
 
-proc newILDGReader*: ILDGReader {.importcpp: "Grid::IldgReader()", grid, constructor.}
+proc newILDGReader*: ILDGReader {.importcpp: "Grid::IldgReader()", grim, constructor.}
 
 proc open*(r: var ILDGReader; filename: cstring) 
-  {.importcpp: "#.open(std::string(#))", grid.}
+  {.importcpp: "#.open(std::string(#))", grim.}
 
-proc close*(r: var ILDGReader) {.importcpp: "#.close()", grid.}
+proc close*(r: var ILDGReader) {.importcpp: "#.close()", grim.}
 
 proc readConfiguration*(r: var ILDGReader; field: var GaugeField; header: var Header) 
-  {.importcpp: "#.readConfiguration(gd(#), #)", grid.}
+  {.importcpp: "#.readConfiguration(gd(#), #)", grim.}
 
 proc readConfiguration*(r: var ILDGReader; field: var GaugeField) =
   var header = newHeader()
@@ -328,7 +328,7 @@ proc readILDGConfiguration*(field: var GaugeField; filename: string) =
 #[ ILDG write facilities ]#
 
 proc newILDGWriterImpl(isBoss: bool): ILDGWriter 
-  {.importcpp: "Grid::IldgWriter(#)", grid, constructor.}
+  {.importcpp: "Grid::IldgWriter(#)", grim, constructor.}
 
 proc newILDGWriter*(grid: ptr Grid): ILDGWriter =
   newILDGWriterImpl(grid.isBoss())
@@ -337,17 +337,17 @@ proc newILDGWriter*(grid: var Grid): ILDGWriter =
   newILDGWriterImpl(addr(grid).isBoss())
 
 proc open*(w: var ILDGWriter; filename: cstring) 
-  {.importcpp: "#.open(std::string(#))", grid.}
+  {.importcpp: "#.open(std::string(#))", grim.}
 
 proc close*(w: var ILDGWriter) 
-  {.importcpp: "#.close()", grid.}
+  {.importcpp: "#.close()", grim.}
 
 proc writeConfiguration*(
   w: var ILDGWriter; 
   field: var GaugeField; 
   sequence: cint; 
   lfn, description: cstring
-) {.importcpp: "#.writeConfiguration(gd(#), #, std::string(#), std::string(#))", grid.}
+) {.importcpp: "#.writeConfiguration(gd(#), #, std::string(#), std::string(#))", grim.}
 
 proc writeConfiguration*(
   w: var ILDGWriter; 

@@ -32,11 +32,11 @@ import grid
 header()
 
 type
-  GeneralLocalStencilView* {.importcpp: "Grid::GeneralLocalStencilView", grid.} = object 
+  GeneralLocalStencilView* {.importcpp: "Grid::GeneralLocalStencilView", grim.} = object 
     ## Wraps a `Grid::GeneralLocalStencilView`
-  GeneralLocalStencil* {.importcpp: "Grid::GeneralLocalStencil", grid.} = object
+  GeneralLocalStencil* {.importcpp: "Grid::GeneralLocalStencil", grim.} = object
     ## Wraps a `Grid::GeneralLocalStencil`
-  GeneralStencilEntry* {.importcpp: "Grid::GeneralStencilEntry", grid.} = object
+  GeneralStencilEntry* {.importcpp: "Grid::GeneralStencilEntry", grim.} = object
     ## Wraps a `Grid::GeneralStencilEntry`
 
 type
@@ -100,7 +100,7 @@ type
 proc newGeneralLocalStencil(
   grid: ptr Base; 
   shifts: Vector[Coordinate]
-): GeneralLocalStencil {.importcpp: "Grid::GeneralLocalStencil(@)", grid, constructor.}
+): GeneralLocalStencil {.importcpp: "Grid::GeneralLocalStencil(@)", grim, constructor.}
 
 template newGeneralLocalStencil*(
   grid: var Cartesian | var RedBlackCartesian;
@@ -187,13 +187,13 @@ template newDiagonalStencil*(grid: ptr Grid): DiagonalStencil =
   newDiagonalStencil(cast[ptr Base](grid))
 
 proc view*(stencil: GeneralLocalStencil; mode: ViewMode): GeneralLocalStencilView 
-  {.importcpp: "#.View(#)", grid.}
+  {.importcpp: "#.View(#)", grim.}
   ## Returns a `GeneralLocalStencilView` for use inside a dispatch loop.
 
 template view*(stencil: GeneralLocalStencil; access: static Access): GeneralLocalStencilView =
   stencil.view(viewMode(access))
 
-proc viewClose(stencil: GeneralLocalStencilView) {.importcpp: "#.ViewClose()", grid.}
+proc viewClose(stencil: GeneralLocalStencilView) {.importcpp: "#.ViewClose()", grim.}
 
 proc `=destroy`(stencil: GeneralLocalStencilView) = stencil.viewClose()
 
@@ -230,7 +230,7 @@ proc entry*[IA: SomeInteger, IB: SomeInteger](
   stencil: GeneralLocalStencilView; 
   entryIdx: IA; 
   siteIdx: IB
-): ptr GeneralStencilEntry {.importcpp: "#.GetEntry(#, #)", grid.}
+): ptr GeneralStencilEntry {.importcpp: "#.GetEntry(#, #)", grim.}
 
 template `[]`*(stencil: GeneralLocalStencilView; entryIdx: SomeInteger): StencilShift =
   StencilShift(view: addr stencil, idx: int(entryIdx))
@@ -297,10 +297,10 @@ template `[]`*(
     )
 
 proc offset*(entry: ptr GeneralStencilEntry): uint64
-  {.importcpp: "#->_offset", grid.}
+  {.importcpp: "#->_offset", grim.}
 
 proc permute*(entry: ptr GeneralStencilEntry): uint8
-  {.importcpp: "#->_permute", grid.}
+  {.importcpp: "#->_permute", grim.}
 
 #[ test ]#
 
