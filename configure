@@ -334,6 +334,7 @@ help:
 	@echo "  help         Show this help message"
 	@echo ""
 	@echo "Options:"
+	@echo "  :flag        Pass -d:flag to Nim (e.g. make grim :dslDebug)"
 	@echo "  RELEASE=1    Disable runtime checks, max optimisation"
 	@echo "  DEBUG=1      Enable native debugger + line info"
 	@echo "  PROFILE=1    Enable timing instrumentation"
@@ -347,8 +348,17 @@ clean:
 	\$(NIM) clean build/Makefile.nims
 
 # ── Catch-all: treat unknown targets as Nim source names ─────────────────
+# Targets starting with ':' become -d: defines (e.g. :dslDebug → -d:dslDebug)
 
-BUILD_TARGETS := \$(filter-out help clean list,\$(MAKECMDGOALS))
+ALL_TARGETS  := \$(filter-out help clean list,\$(MAKECMDGOALS))
+DEFINE_TARGETS := \$(filter :%,\$(ALL_TARGETS))
+BUILD_TARGETS  := \$(filter-out :%,\$(ALL_TARGETS))
+DEFINES        := \$(patsubst :%,-d:%,\$(DEFINE_TARGETS))
+
+ifneq (\$(DEFINE_TARGETS),)
+\$(DEFINE_TARGETS):
+	@true
+endif
 
 ifneq (\$(BUILD_TARGETS),)
 \$(BUILD_TARGETS): build-impl
@@ -356,7 +366,7 @@ ifneq (\$(BUILD_TARGETS),)
 
 .PHONY: build-impl
 build-impl:
-	\$(NIM) build build/Makefile.nims \$(FLAGS) \$(ARGS) \$(BUILD_TARGETS)
+	\$(NIM) build build/Makefile.nims \$(FLAGS) \$(DEFINES) \$(ARGS) \$(BUILD_TARGETS)
 endif
 MAKEFILE
 

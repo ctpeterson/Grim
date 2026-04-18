@@ -38,6 +38,7 @@ import types/[rng]      # random number generators
 import action/[gaugeaction] # gauge action and force
 
 import dsl/[fielddsl] # field dsl
+import dsl/[stencildsl] # stencil dsl
 
 import io/[lime]
 
@@ -55,6 +56,7 @@ export rng
 export gaugeaction
 
 export fielddsl
+export stencildsl
 
 export lime
 

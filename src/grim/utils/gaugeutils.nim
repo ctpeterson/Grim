@@ -31,83 +31,21 @@ import grid
 import types/[field]
 import types/[view]
 import types/[stencil]
+import dsl/[stencildsl]
 
-#[
-type FatSevenLinkContext* = object
-  oneLink, threeLink, fiveLink, sevenLink: float
-  lepage, naik: float
+proc plaquette*(u: var GaugeField): float =
+  var grid = u.cartesian()
+  var p = grid.newComplexField()
 
-proc newFatSevenLinkContext(
-  oneLink, threeLink, fiveLink, sevenLink: float;
-  lepage, naik: float
-): FatSevenLinkContext = FatSevenLinkContext(
-    oneLink: oneLink,
-    threeLink: threeLink,
-    fiveLink: fiveLink,
-    sevenLink: sevenLink,
-    lepage: lepage,
-    naik: naik
-  )
-  
-template threeLinkStaple*()
+  stencil plaquetteKernel[mu, nu: Direction](grid):
+    fixed: u
+    write: p
+    accelerator:
+      for n in sites:
+        p[n] += trace(u[mu][n]*u[nu][n >> +mu]*adjoint(u[nu][n]*u[mu][n >> +nu]))
 
-proc smear*(c: FatSevenLinkContext; tu: var GaugeField; su: var GaugeLinkField) =
-  # "tight" (unpadded) grid, padded cell, and padded grid
-  var tgrid = tu.cartesian()
-  var cell = tgrid.newPaddedCell(depth = 2)
-  var pgrid = cell.paddedGrid()
-
-  var pu = cell.expand(tu)
-  var psu = pgrid.newGaugeField()
-
-  var axialStencil = pgrid.newAxialStencil()
-  var diagStencil = pgrid.newDiagonalStencil()
-
-  for mu in 0..<nd:
-    psu[mu] = (c.oneLink - 6.0*c.lepage) * pu[mu]
-    for nu in 0..<nd:
-      if nu == mu: continue
-
-  su = cell.extract(psu)
-]#
-
-proc plaquette*(tu: var GaugeField): float =
-  # "tight" (unpadded) grid, padded cell, and padded grid
-  var tgrid = tu.cartesian()
-  var cell = tgrid.newPaddedCell(depth = 1)
-  var pgrid = cell.paddedGrid()
-
-  # prefactor for normalization
-  let volume = tgrid.volume
-  let norm = 2.0 / float(nd*(nd-1)*volume*nc)
-
-  var pu = cell.expand(tu) # padded gauge field
-  var plaq = pgrid.newComplexField() # field to hold plaquette values
-  var stencil = pgrid.newAxialStencil() # on-axis stencil
-
-  plaq.zero()
-
+  p.zero()
   for mu in 1..<nd:
-    var umu = pu[mu]
-    for nu in 0..<mu:
-      var unu = pu[nu]
-      var tmp = pgrid.newComplexField()
-      
-      accelerator:
-        let stencilmuv = stencil[mu].view(Read)
-        let stencilnuv = stencil[nu].view(Read)
-
-        let umuv = umu.view(Read)
-        let unuv = unu.view(Read)
-        
-        var tmpv = tmp.view(Write)
-        
-        for n in sites(pgrid):
-          let n_pmu = stencilmuv[Forward][n]
-          let n_pnu = stencilnuv[Forward][n]
-          let ta = umuv[n]*unuv[n_pmu]
-          let tb = unuv[n]*umuv[n_pnu]
-          tmpv[n] = trace(ta*adjoint(tb))
-      plaq += tmp * norm
-
-  return cell.extract(plaq).sum().re
+    for nu in 0..<mu: plaquetteKernel[mu, nu](p)
+  
+  return 2.0 * p.sum().re / float(nd*(nd-1)*grid.volume*nc)

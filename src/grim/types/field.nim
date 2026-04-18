@@ -132,6 +132,11 @@ macro newFieldType*(name: untyped): untyped =
     template `newName`*(g: var Grid): `name` = `newName`(addr g)
     template `newNameD`*(g: var Grid): `nameD` = `newNameD`(addr g)
     template `newNameF`*(g: var Grid): `nameF` = `newNameF`(addr g)
+
+    # type-dispatched constructor: allocate field of same type on a different grid
+    template newFieldOn*(g: ptr Grid; like: `name`): `name` = `newName`(g)
+    template newFieldOn*(g: ptr Grid; like: `nameD`): `nameD` = `newNameD`(g)
+    template newFieldOn*(g: ptr Grid; like: `nameF`): `nameF` = `newNameF`(g)
     
     # x.Grid() wrapper, preventing name conflict
     proc base*(field: var `name`): ptr Base {.importcpp: "gd(#).Grid()", grim.}
@@ -478,18 +483,18 @@ template newFermionField*(grid: var Grid): untyped =
 
 #[ gauge accessors ]#
 
-proc peekLorentz(src: LatticeGaugeField; mu: cint): LatticeColorMatrix
+proc peekLorentz*(src: LatticeGaugeField; mu: cint): LatticeColorMatrix
   {.importcpp: "Grid::PeekIndex<0>(gd(#), #)", grim.}
-proc peekLorentz(src: LatticeGaugeFieldD; mu: cint): LatticeColorMatrixD
+proc peekLorentz*(src: LatticeGaugeFieldD; mu: cint): LatticeColorMatrixD
   {.importcpp: "Grid::PeekIndex<0>(gd(#), #)", grim.}
-proc peekLorentz(src: LatticeGaugeFieldF; mu: cint): LatticeColorMatrixF
+proc peekLorentz*(src: LatticeGaugeFieldF; mu: cint): LatticeColorMatrixF
   {.importcpp: "Grid::PeekIndex<0>(gd(#), #)", grim.}
 
-proc pokeLorentz(dst: var LatticeGaugeField; src: LatticeColorMatrix; mu: cint)
+proc pokeLorentz*(dst: var LatticeGaugeField; src: LatticeColorMatrix; mu: cint)
   {.importcpp: "Grid::PokeIndex<0>(gd(#), gd(#), #)", grim.}
-proc pokeLorentz(dst: var LatticeGaugeFieldD; src: LatticeColorMatrixD; mu: cint)
+proc pokeLorentz*(dst: var LatticeGaugeFieldD; src: LatticeColorMatrixD; mu: cint)
   {.importcpp: "Grid::PokeIndex<0>(gd(#), gd(#), #)", grim.}
-proc pokeLorentz(dst: var LatticeGaugeFieldF; src: LatticeColorMatrixF; mu: cint)
+proc pokeLorentz*(dst: var LatticeGaugeFieldF; src: LatticeColorMatrixF; mu: cint)
   {.importcpp: "Grid::PokeIndex<0>(gd(#), gd(#), #)", grim.}
 
 template `[]`*(u: GaugeField; mu: int): untyped = peekLorentz(u, cint(mu))

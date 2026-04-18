@@ -489,10 +489,10 @@ proc tracelessAntihermitianProjection*(src: SiteGaugeFieldF): SiteGaugeFieldF
 proc coalescedReadGeneralPermute*[V](vec: V; perm: uint8; ndim: int): V
   {.importcpp: "Grid::coalescedReadGeneralPermute(@)", grim.}
 
-proc coalescedWrite[V](target: V; src: V)
+proc coalescedWrite*[V](target: V; src: V)
   {.importcpp: "Grid::coalescedWrite(@)", grim.}
 
-proc coalescedRead[V](vec: V): V
+proc coalescedRead*[V](vec: V): V
   {.importcpp: "Grid::coalescedRead(@)", grim.}
 
 template `[]`*(view: FieldView; idx: uint64): untyped =
@@ -503,6 +503,15 @@ template `[]`*(view: FieldView; idx: ptr GeneralStencilEntry): untyped =
 
 template `[]=`*(target: FieldView; idx: uint64; val: FieldSite) =
   coalescedWrite(target.get(idx), val)
+
+template `+=`*(target: FieldView; idx: uint64; val: FieldSite) =
+  coalescedWrite(target.get(idx), coalescedRead(target.get(idx)) + val)
+
+template `-=`*(target: FieldView; idx: uint64; val: FieldSite) =
+  coalescedWrite(target.get(idx), coalescedRead(target.get(idx)) - val)
+
+template `*=`*(target: FieldView; idx: uint64; val: FieldSite) =
+  coalescedWrite(target.get(idx), coalescedRead(target.get(idx)) * val)
 
 #[ test ]#
 

@@ -32,6 +32,8 @@ import types/[field]
 import types/[view]
 import types/[stencil]
 
+import dsl/[stencildsl]
+
 type GaugeAction* = object
   plaquette*: float
   rectangle*: float
@@ -46,118 +48,74 @@ proc newGaugeAction*(beta: float, cp, cr, cpg: float = 0.0): GaugeAction =
 proc newGaugeAction*(cp, cr, cpg: float = 0.0): GaugeAction =
   return GaugeAction(plaquette: cp, rectangle: cr, parallelogram: cpg)
 
-proc action*(ctx: GaugeAction; tu: var GaugeField): float =
-  #[ preparation ]#
+#[
+REJ: 2.7739965901273536 0.06241207016834366 0.8695618518239482
+PLAQ:  1.0
+REJ: 2.774933078981121 0.06235364931979684 0.17397506560595657
+PLAQ:  1.0
+REJ: 2.6581547988025704 0.07007740943916647 0.1459811133664362
+PLAQ:  1.0
+REJ: 2.7655269515598775 0.06294292273623002 0.5665201214751856
+PLAQ:  1.0
+REJ: 2.8001714420242934 0.06079963811860888 0.7929420384808191
+PLAQ:  1.0
+]#
 
-  # "tight" (unpadded) grid, padded cell, and padded grid
-  var tgrid = tu.cartesian()
-  var cell = tgrid.newPaddedCell(depth = 1)
-  var pgrid = cell.paddedGrid()
+proc action*(ctx: GaugeAction; u: var GaugeField): float =
+  var grid = u.cartesian()
+
+  # temporary fields
+  var p = grid.newComplexField()
+  var r = grid.newComplexField()
+  var a = grid.newComplexField()
 
   # parameters for prefactors and coefficients
-  let volume = tgrid.volume
-  let norm = float(nd*(nd-1)*volume)
   let colors = float(nc)
+  let norm = float(nd*(nd-1)*grid.volume)
 
   # normalized coefficients
   let cp = ctx.plaquette / norm / colors
   let cr = ctx.rectangle / norm / colors
   let cpg = 2.0 * ctx.parallelogram / norm / colors
 
-  var pu = cell.expand(tu) # padded gauge field
+  # stencil group for full plaquette + rectangle action
+  stencils(grid):
+    fixed: u
 
-  var ta = pgrid.newGaugeLinkField() # plaquette + rectangle
-  var tb = pgrid.newGaugeLinkField() # plaquette + rectangle
-
-  var tc = pgrid.newGaugeLinkField() # rectangle
-  var td = pgrid.newGaugeLinkField() # rectangle
-
-  var ast = pgrid.newAxialStencil()    # on-axis stencil
-  var dst = pgrid.newDiagonalStencil() # diagonal stencil
-
-  var action = pgrid.newComplexField() # action accumulator
-
-  action.zero() # make sure to zero out accumulator
-
-  #[ action calculation ]#
-
-  for mu in 1..<nd:
-    var umu = pu[mu]
-    for nu in 0..<mu:
-      var unu = pu[nu]
-
-      # calculate plaquette corners: needed for rectangle and plaquette
+    # Wilson (plaquette) action kernel
+    stencil plaquette[mu, nu: Direction]:
+      write: p
       accelerator:
-        let astmuv = ast[mu].view(Read)
-        let astnuv = ast[nu].view(Read)
+        for n in sites:
+          p[n] = trace(u[mu][n]*u[nu][n >> +mu]*adjoint(u[nu][n]*u[mu][n >> +nu]))
+    
+    # rectangle action kernel
+    stencil rectangle[mu, nu: Direction]:
+      write: r
+      accelerator:
+        for n in sites:
+          r[n] = trace(u[mu][n]*u[mu][n >> +mu]*u[nu][n >> +2*mu]*adjoint(u[nu][n]*u[mu][n >> +nu]*u[mu][n >> +nu + +mu]))
+          r[n] += trace(u[nu][n]*u[nu][n >> +nu]*u[mu][n >> +2*nu]*adjoint(u[mu][n]*u[nu][n >> +mu]*u[nu][n >> +mu + +nu]))
 
-        let umuv = umu.view(Read)
-        let unuv = unu.view(Read)
-        
-        var tav = ta.view(Write)
-        var tbv = tb.view(Write)
-        
-        for n in sites(pgrid):
-          let n_pmu = astmuv[Forward][n]
-          let n_pnu = astnuv[Forward][n]
-          tav[n] = umuv[n]*unuv[n_pmu]
-          tbv[n] = unuv[n]*umuv[n_pnu]
-
-      # plaquette term
-      if ctx.plaquette != 0.0: action += cp * (colors - trace(ta*adjoint(tb)))
-
-      # rectangle term
-      if ctx.rectangle != 0.0: 
-        # left/right staples
-        accelerator:
-          let astmuv = ast[mu].view(Read)
-          let astnuv = ast[nu].view(Read)
-          let dstmunuv = dst[mu, nu].view(Read)
-
-          let umuv = umu.view(Read)
-          let unuv = unu.view(Read)
-          let tav = ta.view(Read)
-
-          var tcv = tc.view(Write)
-          var tdv = td.view(Write)
-        
-          for n in sites(pgrid):
-            let n_mmu = astmuv[Backward][n]
-            let n_pnu = astnuv[Forward][n]
-            let n_mmu_pnu = dstmunuv[Backward, Forward][n]
-            tcv[n] = tav[n]*adjoint(umuv[n_pnu])
-            tdv[n] = adjoint(umuv[n_mmu])*unuv[n_mmu]*umuv[n_mmu_pnu]
-        
-        # horizontal rectangular plaquette
-        action += cr * (colors - trace(tc*adjoint(td)))
-        
-        # bottom/top staples
-        accelerator:
-          let astmuv = ast[mu].view(Read)
-          let astnuv = ast[nu].view(Read)
-          let dstmunuv = dst[mu, nu].view(Read)
-
-          let umuv = umu.view(Read)
-          let unuv = unu.view(Read)
-          let tbv = tb.view(Read)
-
-          var tcv = tc.view(Write)
-          var tdv = td.view(Write)
-
-          for n in sites(pgrid):
-            let n_pmu = astmuv[Forward][n]
-            let n_mnu = astnuv[Backward][n]
-            let n_pmu_mnu = dstmunuv[Forward, Backward][n]
-            tcv[n] = adjoint(unuv[n_mnu])*umuv[n_mnu]*unuv[n_pmu_mnu]
-            tdv[n] = tbv[n]*adjoint(unuv[n_pmu])
-
-        # vertical rectangular plaquette
-        action += cr * (colors - trace(tc*adjoint(td)))
-
+  # action calculation
+  a.zero()
+  for mu in 1..<nd:
+    for nu in 0..<mu:
+      # plaquette
+      if ctx.plaquette != 0.0: 
+        plaquette[mu, nu](p)
+        a += cp * (colors - p)
+      
+      # rectangle
+      if ctx.rectangle != 0.0:
+        rectangle[mu, nu](r)
+        a += cr * (2.0 * colors - r)
+      
+      # parallelogram
       assert ctx.parallelogram == 0.0, "parallelogram term not yet implemented"
   
   # return action
-  return norm * cell.extract(action).sum().re
+  return norm * a.sum().re
 
 proc force*(ctx: GaugeAction; tu: var GaugeField): GaugeField =
   #[ preparation ]#

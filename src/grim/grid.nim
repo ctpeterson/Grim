@@ -439,7 +439,8 @@ macro sites*(x: ForLoopStmt): untyped =
     else:
       {.emit: ["thread_for(", `loopVarStr`, ", ", numSites, ", {"].}
     var `loopVarNode` {.importc: `loopVarStr`, nodecl, noinit.}: uint64
-    `bodyNode`
+    block:
+      `bodyNode`
     {.emit: ["});"].}
 
 #[ tests ]#
