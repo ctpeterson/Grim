@@ -31,6 +31,7 @@ import grid
 import types/[field]
 import types/[view]
 import types/[stencil]
+
 import dsl/[stencildsl]
 
 proc plaquette*(u: var GaugeField): float =
