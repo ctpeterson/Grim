@@ -1,6 +1,6 @@
 #[ 
   Grim: https://github.com/ctpeterson/Grim
-  Source file: src/grim/utils/gaugeutils.nim
+  Source file: src/grim/math/reunitarization.nim
 
   Author: Curtis Taylor Peterson <curtistaylorpetersonwork@gmail.com>
 
@@ -25,28 +25,3 @@
   WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN 
   CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ]#
-
-import grid
-
-import types/[field]
-import types/[view]
-import types/[stencil]
-
-import dsl/[stencildsl]
-
-proc plaquette*(u: var GaugeField): float =
-  var grid = u.cartesian()
-  var p = grid.newComplexField()
-
-  stencil plaquetteKernel[mu, nu: Direction](grid):
-    fixed: u
-    write: p
-    accelerator:
-      for n in sites:
-        p[n] += trace(u[mu][n]*u[nu][n >> +mu]*adjoint(u[nu][n]*u[mu][n >> +nu]))
-
-  p.zero()
-  for mu in 1..<nd:
-    for nu in 0..<mu: plaquetteKernel[mu, nu](p)
-  
-  return 2.0 * p.sum().re / float(nd*(nd-1)*grid.volume*nc)

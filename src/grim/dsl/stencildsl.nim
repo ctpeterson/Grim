@@ -108,6 +108,7 @@ type # types for section (7)
     readFieldNodes: seq[NimNode]  # input fields, re-padded each call
     writeFieldNodes: seq[NimNode] # output fields
     dispatchBlocks: seq[NimNode]  # accelerator/host blocks
+    returnTypeNode: NimNode       # non-nil when `returns: T` is declared
 
 const zeroShiftKey = "__zero_disp__"
 
@@ -125,6 +126,9 @@ proc isWriteBlock(n: NimNode): bool = n.kind == nnkCall and $n[0] == "write"
 
 proc isDispatchBlock(n: NimNode): bool =
   return n.kind == nnkCall and ($n[0] == "accelerator" or $n[0] == "host")
+
+proc isReturnsBlock(n: NimNode): bool =
+  n.kind == nnkCall and n.len == 2 and $n[0] == "returns"
 
 proc extractFieldNames(node: NimNode): seq[NimNode] =
   ## handles comma-separated lists of field identifiers
@@ -713,6 +717,9 @@ proc parseStencilBody(body: NimNode): ParsedBody =
     elif node.isReadBlock: result.readFieldNodes.add extractFieldNames(node)
     elif node.isWriteBlock: result.writeFieldNodes.add extractFieldNames(node)
     elif node.isDispatchBlock: result.dispatchBlocks.add node
+    elif node.isReturnsBlock:
+      let arg = node[1]
+      result.returnTypeNode = if arg.kind == nnkStmtList and arg.len > 0: arg[0] else: arg
 
 #[ (9) parse generic directions ]#
 
@@ -988,7 +995,8 @@ macro stencil*(firstArg: untyped; body: untyped): untyped =
   let writeFieldNames = parsed.writeFieldNodes.mapIt($it)
   let allReadNames = fixedFieldNames & readFieldNames
 
-  let allDeclaredFields = (fixedFieldNames & readFieldNames & writeFieldNames).toHashSet
+  var allDeclaredFields = (fixedFieldNames & readFieldNames & writeFieldNames).toHashSet
+  if parsed.returnTypeNode != nil: allDeclaredFields.incl "result"
   validateFieldReferences(parsed.dispatchBlocks, allDeclaredFields)
 
   # detect gauge fields
@@ -1096,7 +1104,11 @@ macro stencil*(firstArg: untyped; body: untyped): untyped =
         var `paddedIdent` = `cellSym`.expand(`fieldNode`)
 
   # allocate write fields each call
-  var compoundWrites = detectCompoundWrites(parsed.dispatchBlocks, writeFieldNames.toHashSet)
+  # include "result" in the detection set so detectCompoundWrites correctly
+  # distinguishes compound-only result (+=) from pure-write result (= or = then +=).
+  var cwSearchSet = writeFieldNames.toHashSet
+  if parsed.returnTypeNode != nil: cwSearchSet.incl "result"
+  var compoundWrites = detectCompoundWrites(parsed.dispatchBlocks, cwSearchSet)
   for fieldNode in parsed.writeFieldNodes:
     let fieldName = $fieldNode
     let paddedIdent = ident(fieldName & "_padded")
@@ -1108,16 +1120,43 @@ macro stencil*(firstArg: untyped; body: untyped): untyped =
       applyBody.add quote do:
         var `paddedIdent` = newFieldOn(`paddedSym`, `fieldNode`)
 
+  # allocate implicit result field when `returns:` is declared
+  if parsed.returnTypeNode != nil:
+    let retType = parsed.returnTypeNode
+    let constructorIdent = ident("new" & $retType)
+    let resultPadded = ident("result_padded")
+    paddedMap["result"] = resultPadded
+    let paddedDeref = nnkDerefExpr.newTree(paddedSym)
+    applyBody.add quote do:
+      var `resultPadded` = `constructorIdent`(`paddedDeref`)
+    # Grid does not guarantee zero-initialization; for compound-only result
+    # (result[n] += ... with no preceding result[n] = ...) we must zero the
+    # fresh allocation so that AcceleratorWrite reads zeros, not garbage.
+    if "result" in compoundWrites:
+      applyBody.add nnkPragma.newTree(
+        nnkExprColonExpr.newTree(
+          ident"emit",
+          nnkBracket.newTree(
+            newStrLitNode("gd("),
+            resultPadded,
+            newStrLitNode(") = Grid::Zero();"))))
+
   # dispatch blocks
   let allReadNodes = allFixedFieldNodes & parsed.readFieldNodes
+  let wsFieldNodes = if parsed.returnTypeNode != nil:
+                       parsed.writeFieldNodes & @[ident"result"]
+                     else: parsed.writeFieldNodes
+  let wsFieldNames = if parsed.returnTypeNode != nil:
+                       writeFieldNames & @["result"]
+                     else: writeFieldNames
   for dblock in parsed.dispatchBlocks:
     applyBody.add emitDispatchBlock(
       dblock, 
       shiftMap, 
       allReadNodes,
-      parsed.writeFieldNodes, 
+      wsFieldNodes, 
       allReadNames, 
-      writeFieldNames,
+      wsFieldNames,
       gaugeFields, 
       stencilSym, 
       stencilViewSym, 
@@ -1133,6 +1172,12 @@ macro stencil*(firstArg: untyped; body: untyped): untyped =
     let paddedIdent = paddedMap[$fieldNode]
     applyBody.add quote do:
       `fieldNode` = `cellSym`.extract(`paddedIdent`)
+
+  # extract and return implicit result when `returns:` is declared
+  if parsed.returnTypeNode != nil:
+    let resultPadded = ident("result_padded")
+    applyBody.add quote do:
+      `cellSym`.extract(`resultPadded`)
 
   # ── generate callable template / bracket syntax ──────────────────────
   let hasFieldParams = parsed.readFieldNodes.len + parsed.writeFieldNodes.len > 0
@@ -1212,7 +1257,7 @@ macro stencil*(firstArg: untyped; body: untyped): untyped =
     let scopedApplyBody = newBlockStmt(fullApply)
 
     # template `()`(bound: BoundType; field1, ...: untyped) {.dirty.}
-    var callParams = @[newEmptyNode()]
+    var callParams = @[if parsed.returnTypeNode != nil: parsed.returnTypeNode else: newEmptyNode()]
     callParams.add newIdentDefs(boundParam, boundType)
     for fieldNode in parsed.readFieldNodes:
       callParams.add newIdentDefs(fieldNode, ident"untyped")
@@ -1237,7 +1282,7 @@ macro stencil*(firstArg: untyped; body: untyped): untyped =
 
   elif hasFieldParams:
     let scopedApplyBody = newBlockStmt(applyBody)
-    var params = @[newEmptyNode()]
+    var params = @[if parsed.returnTypeNode != nil: parsed.returnTypeNode else: newEmptyNode()]
     for fieldNode in parsed.readFieldNodes:
       params.add newIdentDefs(fieldNode, ident"untyped")
     for fieldNode in parsed.writeFieldNodes:
@@ -1255,9 +1300,21 @@ macro stencil*(firstArg: untyped; body: untyped): untyped =
     result.add tmpl
   else:
     let scopedApplyBody = newBlockStmt(applyBody)
-    result.add quote do:
-      template `stencilName`() {.dirty.} =
-        `scopedApplyBody`
+    if parsed.returnTypeNode != nil:
+      let retType = parsed.returnTypeNode
+      var tmpl = newNimNode(nnkTemplateDef)
+      tmpl.add stencilName
+      tmpl.add newEmptyNode()
+      tmpl.add newEmptyNode()
+      tmpl.add newNimNode(nnkFormalParams).add(@[retType])
+      tmpl.add newNimNode(nnkPragma).add(ident"dirty")
+      tmpl.add newEmptyNode()
+      tmpl.add scopedApplyBody
+      result.add tmpl
+    else:
+      result.add quote do:
+        template `stencilName`() {.dirty.} =
+          `scopedApplyBody`
 
   when defined(dslDebug):
     echo "=== stencil (named) macro expansion ==="
@@ -1306,7 +1363,8 @@ proc emitGroupedStencil(
   let writeFieldNames = parsed.writeFieldNodes.mapIt($it)
   let allReadNames = fixedFieldNames & readFieldNames
 
-  let allDeclaredFields = (fixedFieldNames & readFieldNames & writeFieldNames).toHashSet
+  var allDeclaredFields = (fixedFieldNames & readFieldNames & writeFieldNames).toHashSet
+  if parsed.returnTypeNode != nil: allDeclaredFields.incl "result"
   validateFieldReferences(parsed.dispatchBlocks, allDeclaredFields)
 
   # gauge fields — merge shared + local
@@ -1374,7 +1432,9 @@ proc emitGroupedStencil(
         var `paddedIdent` = `cellSym`.expand(`fieldNode`)
 
   # allocate write fields each call
-  var compoundWrites = detectCompoundWrites(parsed.dispatchBlocks, writeFieldNames.toHashSet)
+  var cwSearchSet = writeFieldNames.toHashSet
+  if parsed.returnTypeNode != nil: cwSearchSet.incl "result"
+  var compoundWrites = detectCompoundWrites(parsed.dispatchBlocks, cwSearchSet)
   for fieldNode in parsed.writeFieldNodes:
     let fieldName = $fieldNode
     let paddedIdent = ident(fieldName & "_padded")
@@ -1386,12 +1446,36 @@ proc emitGroupedStencil(
       applyBody.add quote do:
         var `paddedIdent` = newFieldOn(`paddedSym`, `fieldNode`)
 
+  # allocate implicit result field when `returns:` is declared
+  if parsed.returnTypeNode != nil:
+    let retType = parsed.returnTypeNode
+    let constructorIdent = ident("new" & $retType)
+    let resultPadded = ident("result_padded")
+    paddedMap["result"] = resultPadded
+    let paddedDeref = nnkDerefExpr.newTree(paddedSym)
+    applyBody.add quote do:
+      var `resultPadded` = `constructorIdent`(`paddedDeref`)
+    if "result" in compoundWrites:
+      applyBody.add nnkPragma.newTree(
+        nnkExprColonExpr.newTree(
+          ident"emit",
+          nnkBracket.newTree(
+            newStrLitNode("gd("),
+            resultPadded,
+            newStrLitNode(") = Grid::Zero();"))))
+
   # dispatch blocks
   let allReadNodes = allFixedFieldNodes & parsed.readFieldNodes
+  let wsFieldNodes = if parsed.returnTypeNode != nil:
+                       parsed.writeFieldNodes & @[ident"result"]
+                     else: parsed.writeFieldNodes
+  let wsFieldNames = if parsed.returnTypeNode != nil:
+                       writeFieldNames & @["result"]
+                     else: writeFieldNames
   for dblock in parsed.dispatchBlocks:
     applyBody.add emitDispatchBlock(
       dblock, shiftMap, allReadNodes,
-      parsed.writeFieldNodes, allReadNames, writeFieldNames,
+      wsFieldNodes, allReadNames, wsFieldNames,
       gaugeFields, stencilSym, stencilViewSym, paddedSym,
       shiftExprs.len > 0, paddedMap, gaugePaddedPeeks, compoundWrites)
 
@@ -1400,6 +1484,12 @@ proc emitGroupedStencil(
     let paddedIdent = paddedMap[$fieldNode]
     applyBody.add quote do:
       `fieldNode` = `cellSym`.extract(`paddedIdent`)
+
+  # extract and return implicit result when `returns:` is declared
+  if parsed.returnTypeNode != nil:
+    let resultPadded = ident("result_padded")
+    applyBody.add quote do:
+      `cellSym`.extract(`resultPadded`)
 
   # ── generate callable template / bracket syntax ──────────────────────
   let hasFieldParams = parsed.readFieldNodes.len + parsed.writeFieldNodes.len > 0
@@ -1454,7 +1544,7 @@ proc emitGroupedStencil(
     for child in applyBody: fullApply.add child
     let scopedApplyBody = newBlockStmt(fullApply)
 
-    var callParams = @[newEmptyNode()]
+    var callParams = @[if parsed.returnTypeNode != nil: parsed.returnTypeNode else: newEmptyNode()]
     callParams.add newIdentDefs(boundParam, boundType)
     for fieldNode in parsed.readFieldNodes:
       callParams.add newIdentDefs(fieldNode, ident"untyped")
@@ -1477,7 +1567,7 @@ proc emitGroupedStencil(
 
   elif hasFieldParams:
     let scopedApplyBody = newBlockStmt(applyBody)
-    var params = @[newEmptyNode()]
+    var params = @[if parsed.returnTypeNode != nil: parsed.returnTypeNode else: newEmptyNode()]
     for fieldNode in parsed.readFieldNodes:
       params.add newIdentDefs(fieldNode, ident"untyped")
     for fieldNode in parsed.writeFieldNodes:
@@ -1494,9 +1584,21 @@ proc emitGroupedStencil(
     result.add tmpl
   else:
     let scopedApplyBody = newBlockStmt(applyBody)
-    result.add quote do:
-      template `stencilName`() {.dirty.} =
-        `scopedApplyBody`
+    if parsed.returnTypeNode != nil:
+      let retType = parsed.returnTypeNode
+      var tmpl = newNimNode(nnkTemplateDef)
+      tmpl.add stencilName
+      tmpl.add newEmptyNode()
+      tmpl.add newEmptyNode()
+      tmpl.add newNimNode(nnkFormalParams).add(@[retType])
+      tmpl.add newNimNode(nnkPragma).add(ident"dirty")
+      tmpl.add newEmptyNode()
+      tmpl.add scopedApplyBody
+      result.add tmpl
+    else:
+      result.add quote do:
+        template `stencilName`() {.dirty.} =
+          `scopedApplyBody`
 
 macro stencils*(firstArg: untyped; body: untyped): untyped =
   ## Group macro: shared PaddedCell and fixed fields across multiple stencils.
@@ -2750,6 +2852,98 @@ when isMainModule:
         let e = norm2(psi - cshift(phi, cint(mu), 1))
         if e > maxErr: maxErr = e
       check("grouped shift (maxErr=" & $maxErr & ")", maxErr < eps)
+
+    # ─────────────────────────────────────────────────────────────────
+    # returns: keyword tests
+    # ─────────────────────────────────────────────────────────────────
+
+    block: # returns: scalar, direction-generic, pure assignment
+      print "--- returns: LatticeComplexD, dir-generic forward shift ---"
+      rng.random(phi)
+      stencil shiftRet[d: Direction](lattice):
+        read: phi
+        returns: LatticeComplexD
+        accelerator:
+          for n in sites:
+            result[n] = phi[n >> +d]
+      var maxErr: cdouble = 0.0
+      for mu in 0..<nd:
+        let r = shiftRet[mu](phi)
+        let e = norm2(r - cshift(phi, cint(mu), 1))
+        if e > maxErr: maxErr = e
+      check("returns: scalar dir-generic shift (maxErr=" & $maxErr & ")", maxErr < eps)
+
+    block: # returns: scalar, hasFieldParams (read field param, no direction generic)
+      print "--- returns: LatticeComplexD, field-param copy ---"
+      rng.random(phi)
+      stencil copyRet(lattice):
+        read: phi
+        returns: LatticeComplexD
+        accelerator:
+          for n in sites:
+            result[n] = phi[n]
+      let r = copyRet(phi)
+      let err = norm2(r - phi)
+      check("returns: scalar field-param copy (err=" & $err & ")", err < eps)
+
+    block: # returns: scalar, compound += only, direction-generic (fwd + bwd sum)
+      print "--- returns: LatticeComplexD, compound += fwd+bwd ---"
+      rng.random(phi)
+      stencil sumFwdBwdRet[d: Direction](lattice):
+        read: phi
+        returns: LatticeComplexD
+        accelerator:
+          for n in sites:
+            result[n] += phi[n >> +d]
+            result[n] += phi[n >> -d]
+      var maxErr: cdouble = 0.0
+      for mu in 0..<nd:
+        let r = sumFwdBwdRet[mu](phi)
+        let expected = cshift(phi, cint(mu), 1) + cshift(phi, cint(mu), -1)
+        let e = norm2(r - expected)
+        if e > maxErr: maxErr = e
+      check("returns: += fwd+bwd (maxErr=" & $maxErr & ")", maxErr < eps)
+
+    block: # returns: gauge link, direction-generic, pure = then compound +=
+      print "--- returns: LatticeColorMatrixD, full staple (fwd + bwd) ---"
+      randomGauge(rng, U)
+      stencil stapleRet[mu, nu: Direction](lattice, U):
+        returns: LatticeColorMatrixD
+        accelerator:
+          for n in sites:
+            result[n] = U[nu][n >> +mu] * adj(U[mu][n >> +nu]) * adj(U[nu][n])
+            result[n] += adj(U[nu][n >> (+mu + -nu)]) * adj(U[mu][n >> -nu]) * U[nu][n >> -nu]
+      var maxErr: cdouble = 0.0
+      for mu in 0.cint..<cint(nd):
+        for nu in 0.cint..<cint(nd):
+          if mu == nu: continue
+          let r = stapleRet[mu, nu]()
+          let Umu = peekLorentz(U, mu)
+          let Unu = peekLorentz(U, nu)
+          let fwd = cshift(Unu, mu, 1) * adj(cshift(Umu, nu, 1)) * adj(Unu)
+          let bwd = adj(cshift(cshift(Unu, mu, 1), nu, -1)) * adj(cshift(Umu, nu, -1)) * cshift(Unu, nu, -1)
+          let e = norm2(r - (fwd + bwd))
+          if e > maxErr: maxErr = e
+      check("returns: staple (maxErr=" & $maxErr & ")", maxErr < eps)
+
+    block: # returns: scalar, fixed field ref + read param + returns, direction-generic
+      print "--- returns: scalar, fixed ref + read param ---"
+      randomGauge(rng, U)
+      rng.random(phi)
+      stencil gaugeActRet[mu: Direction](lattice, U):
+        read: phi
+        returns: LatticeComplexD
+        accelerator:
+          for n in sites:
+            result[n] = trace(U[mu][n]) * phi[n]
+      var maxErr: cdouble = 0.0
+      for mu in 0.cint..<cint(nd):
+        let r = gaugeActRet[mu](phi)
+        let Umu = peekLorentz(U, mu)
+        let expected = trace(Umu) * phi
+        let e = norm2(r - expected)
+        if e > maxErr: maxErr = e
+      check("returns: trace(U)*phi (maxErr=" & $maxErr & ")", maxErr < eps)
 
     # ─────────────────────────────────────────────────────────────────
     # Summary

@@ -1,6 +1,6 @@
 #[ 
   Grim: https://github.com/ctpeterson/Grim
-  Source file: src/grim/grim.nim
+  Source file: src/grim/gauge/gaugeutils.nim
 
   Author: Curtis Taylor Peterson <curtistaylorpetersonwork@gmail.com>
 
@@ -26,40 +26,28 @@
   CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ]#
 
-#[imports ]#
+import grid
 
-import grid            # base Grid API
+import types/[field]
+import types/[view]
+import types/[stencil]
 
-import types/[stencil]  # general local stencil
-import types/[field]    # field types
-import types/[view]     # field views
-import types/[rng]      # random number generators
+import dsl/[stencildsl]
 
-import action/[gaugeaction] # gauge action and force
+proc plaquette*(u: var GaugeField): float =
+  var grid = u.cartesian()
+  var p = grid.newComplexField()
 
-import dsl/[fielddsl] # field dsl
-import dsl/[stencildsl] # stencil dsl
+  stencil plaquetteKernel[mu, nu: Direction](grid):
+    fixed: u
+    write: p
 
-import io/[lime]
+    accelerator:
+      for n in sites:
+        p[n] += trace(u[mu][n]*u[nu][n >> +mu]*adjoint(u[nu][n]*u[mu][n >> +nu]))
 
-import utils/[commandline]
-import gauge/[gaugeutils]
-
-#[ exports ]#
-
-export grid
-
-export field
-export stencil
-export view
-export rng
-
-export gaugeaction
-
-export fielddsl
-export stencildsl
-
-export lime
-
-export commandline
-export gaugeutils
+  p.zero()
+  for mu in 1..<nd:
+    for nu in 0..<mu: plaquetteKernel[mu, nu](p)
+  
+  return 2.0 * p.sum().re / float(nd*(nd-1)*grid.volume*nc)

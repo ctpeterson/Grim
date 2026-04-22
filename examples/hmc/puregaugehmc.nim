@@ -30,8 +30,6 @@ import std/[math]
 
 import grim
 
-import utils/[gaugeutils]
-
 # macro that takes in command line inputs; if not specified, default parameters 
 # provided here; for example, override beta with `--beta 8.0` on command line
 parameters: 

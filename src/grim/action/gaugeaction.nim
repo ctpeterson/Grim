@@ -164,9 +164,7 @@ proc action1*(ctx: GaugeAction; tu: var GaugeField): float =
 proc action2*(ctx: GaugeAction; u: var GaugeField): float =
   var grid = u.cartesian()
 
-  # temporary fields
-  var p = grid.newComplexField()
-  var r = grid.newComplexField()
+  # action accumulator
   var a = grid.newComplexField()
 
   # parameters for prefactors and coefficients
@@ -184,18 +182,20 @@ proc action2*(ctx: GaugeAction; u: var GaugeField): float =
 
     # Wilson (plaquette) action kernel
     stencil plaquette[mu, nu: Direction]:
-      write: p
+      returns: ComplexField
+
       accelerator:
         for n in sites:
-          p[n] = trace(u[mu][n]*u[nu][n >> +mu]*adjoint(u[nu][n]*u[mu][n >> +nu]))
+          result[n] = trace(u[mu][n]*u[nu][n >> +mu]*adjoint(u[nu][n]*u[mu][n >> +nu]))
     
     # rectangle action kernel
     stencil rectangle[mu, nu: Direction]:
-      write: r
+      returns: ComplexField
+
       accelerator:
         for n in sites:
-          r[n] = trace(u[mu][n]*u[mu][n >> +mu]*u[nu][n >> +2*mu]*adjoint(u[nu][n]*u[mu][n >> +nu]*u[mu][n >> +nu + +mu]))
-          r[n] += trace(u[nu][n]*u[nu][n >> +nu]*u[mu][n >> +2*nu]*adjoint(u[mu][n]*u[nu][n >> +mu]*u[nu][n >> +mu + +nu]))
+          result[n] =  trace(u[mu][n]*u[mu][n >> +mu]*u[nu][n >> +2*mu]*adjoint(u[nu][n]*u[mu][n >> +nu]*u[mu][n >> +nu + +mu]))
+          result[n] += trace(u[nu][n]*u[nu][n >> +nu]*u[mu][n >> +2*nu]*adjoint(u[mu][n]*u[nu][n >> +mu]*u[nu][n >> +mu + +nu]))
 
   # action calculation
   a.zero()
@@ -203,13 +203,11 @@ proc action2*(ctx: GaugeAction; u: var GaugeField): float =
     for nu in 0..<mu:
       # plaquette
       if ctx.plaquette != 0.0: 
-        plaquette[mu, nu](p)
-        a += cp * (colors - p)
+        a += cp * (colors - plaquette[mu, nu]())
       
       # rectangle
       if ctx.rectangle != 0.0:
-        rectangle[mu, nu](r)
-        a += cr * (2.0 * colors - r)
+        a += cr * (2.0 * colors - rectangle[mu, nu]())
       
       # parallelogram
       assert ctx.parallelogram == 0.0, "parallelogram term not yet implemented"
@@ -384,7 +382,7 @@ proc force2*(ctx: GaugeAction; u: var GaugeField): GaugeField =
       write: r
       accelerator:
         for n in sites:
-          r[n] = u[nu][n]*u[mu][n >> +nu]*u[mu][n >> +nu + +mu]*adjoint(u[nu][n >> +2*mu])*adjoint(u[mu][n >> +mu])
+          r[n] =  u[nu][n]*u[mu][n >> +nu]*u[mu][n >> +nu + +mu]*adjoint(u[nu][n >> +2*mu])*adjoint(u[mu][n >> +mu])
           r[n] += adjoint(u[nu][n >> -nu])*u[mu][n >> -nu]*u[mu][n >> -nu + +mu]*u[nu][n >> -nu + +2*mu]*adjoint(u[mu][n >> +mu])
           r[n] += adjoint(u[mu][n >> -mu])*u[nu][n >> -mu]*u[mu][n >> -mu + +nu]*u[mu][n >> +nu]*adjoint(u[nu][n >> +mu])
           r[n] += adjoint(u[mu][n >> -mu])*adjoint(u[nu][n >> -mu + -nu])*u[mu][n >> -mu + -nu]*u[mu][n >> -nu]*u[nu][n >> -nu + +mu]
@@ -452,3 +450,27 @@ when isMainModule:
     difference = (result - forceReference)/forceReference
     print "reference: ", forceReference, " result: ", result, " difference: ", difference
     print "force time: ", t1 - t0, " s"
+
+#[
+mpirun -n 4 ./bin/puregaugehmc --grid 8.8.8.16 --mpi 1.1.2.2
+REJ: 5.462185290140042 0.004244270640404502 0.8695618518239482
+PLAQ:  1.0
+REJ: 5.382408415491227 0.0045967377333090325 0.17397506560595657
+PLAQ:  1.0
+REJ: 5.524155530001735 0.003989236060276389 0.1459811133664362
+PLAQ:  1.0
+REJ: 5.674959266936639 0.0034308087208006063 0.5665201214751856
+PLAQ:  1.0
+REJ: 5.586219153687125 0.003749176160430738 0.7929420384808191
+PLAQ:  1.0
+REJ: 5.519175631401595 0.004009151598872227 0.1835375417083436
+PLAQ:  1.0
+REJ: 5.539473931843531 0.003928593002464711 0.2468205940948671
+PLAQ:  1.0
+REJ: 5.720198384551622 0.0032790603229013488 0.4313241260041001
+PLAQ:  1.0
+REJ: 5.426203348069976 0.004399768522036045 0.8077974041287886
+PLAQ:  1.0
+REJ: 5.599489163134422 0.0036997532041620875 0.27752054329774295
+PLAQ:  1.0
+]#
