@@ -35,12 +35,104 @@ import grid
 import types/[field]
 import types/[view]
 
+header()
+
+type LatticeComparison* {.importcpp: "Field<Grid::Lattice<Grid::vPredicate>>", grim.} = object
+
+proc `==`*(lhs: var Field; rhs: int): LatticeComparison
+  {.importcpp: "gd(#) == #", grim.}
+
+proc `==`*(lhs: int; rhs: var Field): LatticeComparison
+  {.importcpp: "# == gd(#)", grim.}
+
+proc `!=`*(lhs, rhs: var Field): LatticeComparison
+  {.importcpp: "gd(#) != gd(#)", grim.}
+
+proc `!=`*(lhs: var Field; rhs: float): LatticeComparison
+  {.importcpp: "gd(#) != #", grim.}
+
+proc `!=`*(lhs: float; rhs: var Field): LatticeComparison
+  {.importcpp: "# != gd(#)", grim.}
+
+proc `!=`*(lhs: var Field; rhs: int): LatticeComparison
+  {.importcpp: "gd(#) != #", grim.}
+
+proc `!=`*(lhs: int; rhs: var Field): LatticeComparison
+  {.importcpp: "# != gd(#)", grim.}
+
+proc `<`*(lhs, rhs: var Field): LatticeComparison
+  {.importcpp: "gd(#) < gd(#)", grim.}
+
+proc `<`*(lhs: var Field; rhs: float): LatticeComparison
+  {.importcpp: "gd(#) < #", grim.}
+
+proc `<`*(lhs: float; rhs: var Field): LatticeComparison
+  {.importcpp: "# < gd(#)", grim.}
+
+proc `<`*(lhs: var Field; rhs: int): LatticeComparison
+  {.importcpp: "gd(#) < #", grim.}
+
+proc `<`*(lhs: int; rhs: var Field): LatticeComparison
+  {.importcpp: "# < gd(#)", grim.}
+
+proc `<=`*(lhs, rhs: var Field): LatticeComparison
+  {.importcpp: "gd(#) <= gd(#)", grim.}
+
+proc `<=`*(lhs: var Field; rhs: float): LatticeComparison
+  {.importcpp: "gd(#) <= #", grim.}
+
+proc `<=`*(lhs: float; rhs: var Field): LatticeComparison
+  {.importcpp: "# <= gd(#)", grim.}
+
+proc `<=`*(lhs: var Field; rhs: int): LatticeComparison
+  {.importcpp: "gd(#) <= #", grim.}
+
+proc `<=`*(lhs: int; rhs: var Field): LatticeComparison
+  {.importcpp: "# <= gd(#)", grim.}
+
+proc `>`*(lhs, rhs: var Field): LatticeComparison
+  {.importcpp: "gd(#) > gd(#)", grim.}
+
+proc `>`*(lhs: var Field; rhs: float): LatticeComparison
+  {.importcpp: "gd(#) > #", grim.}
+
+proc `>`*(lhs: float; rhs: var Field): LatticeComparison
+  {.importcpp: "# > gd(#)", grim.}
+
+proc `>`*(lhs: var Field; rhs: int): LatticeComparison
+  {.importcpp: "gd(#) > #", grim.}
+
+proc `>`*(lhs: int; rhs: var Field): LatticeComparison
+  {.importcpp: "# > gd(#)", grim.}
+
+proc `>=`*(lhs, rhs: var Field): LatticeComparison
+  {.importcpp: "gd(#) >= gd(#)", grim.}
+
+proc `>=`*(lhs: var Field; rhs: float): LatticeComparison
+  {.importcpp: "gd(#) >= #", grim.}
+
+proc `>=`*(lhs: float; rhs: var Field): LatticeComparison
+  {.importcpp: "# >= gd(#)", grim.}
+
+proc `>=`*(lhs: var Field; rhs: int): LatticeComparison
+  {.importcpp: "gd(#) >= #", grim.}
+
+proc `>=`*(lhs: int; rhs: var Field): LatticeComparison
+  {.importcpp: "# >= gd(#)", grim.}
+
+proc where*[V](result: var V; predicate: LatticeComparison; trueVal, falseVal: var V)
+  {.importcpp: "gd(#) = where(gd(#), gd(#), gd(#))", grim.}
+
+proc where*[V](predicate: LatticeComparison; trueVal, falseVal: var V): V
+  {.importcpp: "closure(where(gd(#), gd(#), gd(#)))", grim.}
+
 # collects identifiers from syntax tree and transforms them into view declarations
 proc declViews(
   assn: var seq[NimNode]; 
   repls: var Table[string, string]; 
   node: NimNode;
-  mode: ViewMode
+  mode: ViewMode;
+  viewSym: NimNode
 ) =
   if defined(DebugFieldPromotion): echo "declViews: visiting node: ", node.repr, " (kind: ", node.kind, ")"
   case node.kind
@@ -55,35 +147,45 @@ proc declViews(
 
     if not repls.hasKey(identStr):
       let ident = newIdentNode(newIdentViewStr)
-      let local = newCall(newIdentNode("view"), node, ident($mode))
+      let local = newCall(viewSym, node, ident($mode))
       assn.add newVarStmt(ident, local)
       repls[identStr] = newIdentViewStr
   
-  of nnkHiddenDeref: assn.declViews(repls, node[0], mode)
+  of nnkHiddenDeref: assn.declViews(repls, node[0], mode, viewSym)
   of nnkInfix:
-    assn.declViews(repls, node[1], mode)
-    assn.declViews(repls, node[2], mode)
-  of nnkPrefix: assn.declViews(repls, node[1], mode)
-  of nnkPar: assn.declViews(repls, node[0], mode)
+    assn.declViews(repls, node[1], mode, viewSym)
+    assn.declViews(repls, node[2], mode, viewSym)
+  of nnkPrefix: assn.declViews(repls, node[1], mode, viewSym)
+  of nnkPar: assn.declViews(repls, node[0], mode, viewSym)
   else:
     when defined(DebugFieldPromotion): echo " (ignoring node kind: ", node.kind, ")"
 
 # transform AST into indexed access of views
-proc promoteAST(repls: Table[string, string]; node: NimNode): NimNode =
+proc promoteAST(
+  repls: Table[string, string];
+  node: NimNode;
+  getSym, coalescedReadSym: NimNode;
+  opBindings: Table[string, NimNode]
+): NimNode =
   return case node.kind:
     of nnkIdent, nnkSym, nnkBracketExpr, nnkDotExpr, nnkCall:
       let key = node.repr
       if repls.hasKey(key):
-        newTree(nnkBracketExpr, newIdentNode(repls[key]), newIdentNode("n"))
+        newCall(coalescedReadSym, newCall(getSym, newIdentNode(repls[key]), newIdentNode("n")))
       else: node
-    of nnkHiddenDeref: promoteAST(repls, node[0])
-    of nnkInfix: 
-      let (lhs, rhs) = (promoteAST(repls, node[1]), promoteAST(repls, node[2]))
-      newTree(nnkInfix, node[0], lhs, rhs)
+    of nnkHiddenDeref: promoteAST(repls, node[0], getSym, coalescedReadSym, opBindings)
+    of nnkInfix:
+      let opNode = if opBindings.hasKey($node[0]): opBindings[$node[0]] else: node[0]
+      let (lhs, rhs) = (
+        promoteAST(repls, node[1], getSym, coalescedReadSym, opBindings),
+        promoteAST(repls, node[2], getSym, coalescedReadSym, opBindings)
+      )
+      newTree(nnkInfix, opNode, lhs, rhs)
     of nnkPrefix:
-      let operand = promoteAST(repls, node[1])
-      newTree(nnkPrefix, node[0], operand)
-    of nnkPar: promoteAST(repls, node[0])
+      let opNode = if opBindings.hasKey($node[0]): opBindings[$node[0]] else: node[0]
+      let operand = promoteAST(repls, node[1], getSym, coalescedReadSym, opBindings)
+      newTree(nnkPrefix, opNode, operand)
+    of nnkPar: promoteAST(repls, node[0], getSym, coalescedReadSym, opBindings)
     else: node
 
 # step 1: collect lhs/rhs identifiers and declare/create views out of them
@@ -92,10 +194,20 @@ proc promoteAST(repls: Table[string, string]; node: NimNode): NimNode =
 macro promote(ident: untyped; lhs, rhs: untyped): untyped =
   var repls: Table[string, string] = initTable[string, string]()
   var lhsAssn, rhsAssn: seq[NimNode] = @[]
+  let viewSym = bindSym("view")
+  let getSym = bindSym("get")
+  let coalescedReadSym = bindSym("coalescedRead")
+  let coalescedWriteSym = bindSym("coalescedWrite")
+  let opBindings = {
+    "+": bindSym("+", brOpen),
+    "-": bindSym("-", brOpen),
+    "*": bindSym("*", brOpen),
+    "/": bindSym("/", brOpen),
+  }.toTable()
 
   # step 1
-  lhsAssn.declViews(repls, lhs, AcceleratorWriteDiscard)
-  rhsAssn.declViews(repls, rhs, AcceleratorRead)
+  lhsAssn.declViews(repls, lhs, AcceleratorWriteDiscard, viewSym)
+  rhsAssn.declViews(repls, rhs, AcceleratorRead, viewSym)
   let lhsViews = newStmtList(lhsAssn)
   let rhsViews = newStmtList(rhsAssn)
 
@@ -105,11 +217,10 @@ macro promote(ident: untyped; lhs, rhs: untyped): untyped =
     for idx in 0..<rhsAssn.len: echo rhsAssn[idx].repr
 
   # step 2: transform lhs/rhs AST into parallel loop over views
-  let newLHS = promoteAST(repls, lhs)
-  let newRHS = promoteAST(repls, rhs)
-  let viewNode = newLHS[0]
-  let idxNode = newLHS[1]
-  let newExpr = newStmtList(newCall(ident"[]=", viewNode, idxNode, newRHS))
+  let newRHS = promoteAST(repls, rhs, getSym, coalescedReadSym, opBindings)
+  let viewNode = newIdentNode(repls[lhs.repr])
+  let idxNode = ident"n"
+  let newExpr = newStmtList(newCall(coalescedWriteSym, newCall(getSym, viewNode, idxNode), newRHS))
 
   # step 3: wrap everything in an accelerator for loop
   let nIdent = ident"n"
@@ -162,4 +273,27 @@ when isMainModule:
     var complexField2 = grid.newComplexField()
     var complexField3 = grid.newComplexField()
 
+    complexField2.fill(2.0)
+    complexField3.fill(3.0)
+
     complexField1 := 2.0*complexField2 + complexField2*complexField3
+
+    var realField1 = grid.newRealField()
+    var realField2 = grid.newRealField()
+    var realField3 = grid.newRealField()
+
+    realField2.fill(2.0)
+    realField3.fill(3.0)
+
+    complexField1 = where(realField2 < realField3, complexField2, complexField3)
+    complexField1 = where(realField2 > realField3, complexField2, complexField3)
+    complexField1 = where(realField2 <= realField3, complexField2, complexField3)
+    complexField1 = where(realField2 >= realField3, complexField2, complexField3)
+    complexField1 = where(realField2 < 2.0, complexField2, complexField3)
+    complexField1 = where(2.0 < realField3, complexField2, complexField3)
+    complexField1 = where(realField2 > 2.0, complexField2, complexField3)
+    complexField1 = where(2.0 > realField3, complexField2, complexField3)
+    complexField1 = where(realField2 <= 2.0, complexField2, complexField3)
+    complexField1 = where(2.0 <= realField3, complexField2, complexField3)
+    complexField1 = where(realField2 >= 2.0, complexField2, complexField3)
+    complexField1 = where(2.0 >= realField3, complexField2, complexField3)

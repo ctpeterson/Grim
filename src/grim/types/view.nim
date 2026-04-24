@@ -75,6 +75,7 @@ macro newViewType*(name: untyped): untyped =
   let opAdd = ident"+"
   let opSub = ident"-"
   let opMul = ident"*"
+  let opDiv = ident"/"
   let opAddEq = ident"+="
   let opSubEq = ident"-="
   let opMulEq = ident"*="
@@ -154,6 +155,16 @@ macro newViewType*(name: untyped): untyped =
     proc `opMul`*(a: `siteNameD`; b: float64): `siteNameD` {.importcpp: "(# * #)", grim.}
     proc `opMul`*(a: float32; b: `siteNameF`): `siteNameF` {.importcpp: "(# * #)", grim.}
     proc `opMul`*(a: `siteNameF`; b: float32): `siteNameF` {.importcpp: "(# * #)", grim.}
+
+    # mixed scalar arithmetic: site / scalar
+    proc `opDiv`*(a: `siteName`; b: float64): `siteName` {.importcpp: "(# / #)", grim.}
+    proc `opDiv`*(a: `siteNameD`; b: float64): `siteNameD` {.importcpp: "(# / #)", grim.}
+    proc `opDiv`*(a: `siteNameF`; b: float32): `siteNameF` {.importcpp: "(# / #)", grim.}
+
+    # same-type division
+    proc `opDiv`*(a, b: `siteName`): `siteName` {.importcpp: "(# / #)", grim.}
+    proc `opDiv`*(a, b: `siteNameD`): `siteNameD` {.importcpp: "(# / #)", grim.}
+    proc `opDiv`*(a, b: `siteNameF`): `siteNameF` {.importcpp: "(# / #)", grim.}
 
     # mixed scalar arithmetic: scalar + site, site + scalar
     proc `opAdd`*(a: float64; b: `siteName`): `siteName` {.importcpp: "(# + #)", grim.}
@@ -500,6 +511,9 @@ template `[]`*(view: FieldView; idx: uint64): untyped =
 
 template `[]`*(view: FieldView; idx: ptr GeneralStencilEntry): untyped =
   coalescedReadGeneralPermute(view.get(idx.offset), idx.permute, nd)
+
+template `[]`*(view: FieldView; idx: uint64): untyped =
+  coalescedRead(view.get(idx))
 
 template `[]=`*(target: FieldView; idx: uint64; val: FieldSite) =
   coalescedWrite(target.get(idx), val)

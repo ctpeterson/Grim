@@ -101,6 +101,7 @@ macro newFieldType*(name: untyped): untyped =
   let opAdd = ident"+"
   let opSub = ident"-"
   let opMul = ident"*"
+  let opDiv = ident"/"
   let opAddEq = ident"+="
   let opSubEq = ident"-="
   let opMulEq = ident"*="
@@ -292,10 +293,7 @@ macro newFieldType*(name: untyped): untyped =
     proc tepid*(rng: var ParallelRNG; field: var `nameF`)
       {.importcpp: "Grid::SU<Grid::Nc>::TepidConfiguration(#, gd(#))", grim.}
 
-    # unit (cold) configuration
-    proc unit*(dst: var `name`) {.importcpp: "Grid::SU<Grid::Nc>::ColdConfiguration(gd(#))", grim.}
-    proc unit*(dst: var `nameD`) {.importcpp: "Grid::SU<Grid::Nc>::ColdConfiguration(gd(#))", grim.}
-    proc unit*(dst: var `nameF`) {.importcpp: "Grid::SU<Grid::Nc>::ColdConfiguration(gd(#))", grim.}
+    # unit (cold) configuration — added conditionally below via macro if
 
     # explicit set to zero
     proc zero*(dst: var `name`) {.importcpp: "gd(#) = Grid::Zero()", grim.}
@@ -343,6 +341,14 @@ macro newFieldType*(name: untyped): untyped =
     proc `opMul`*(a: float32; b: `nameF`): `nameF` {.importcpp: "(# * gd(#))", grim.}
     proc `opMul`*(a: `nameF`; b: float32): `nameF` {.importcpp: "(gd(#) * #)", grim.}
 
+    # mixed scalar arithmetic: site / scalar, same-type division
+    proc `opDiv`*(a: `name`; b: float64): `name` {.importcpp: "(gd(#) / #)", grim.}
+    proc `opDiv`*(a: `nameD`; b: float64): `nameD` {.importcpp: "(gd(#) / #)", grim.}
+    proc `opDiv`*(a: `nameF`; b: float32): `nameF` {.importcpp: "(gd(#) / #)", grim.}
+    proc `opDiv`*(a, b: `name`): `name` {.importcpp: "(gd(#) / gd(#))", grim.}
+    proc `opDiv`*(a, b: `nameD`): `nameD` {.importcpp: "(gd(#) / gd(#))", grim.}
+    proc `opDiv`*(a, b: `nameF`): `nameF` {.importcpp: "(gd(#) / gd(#))", grim.}
+
     # mixed scalar arithmetic: scalar + site, site + scalar
     proc `opAdd`*(a: float64; b: `name`): `name` {.importcpp: "(# + gd(#))", grim.}
     proc `opAdd`*(a: `name`; b: float64): `name` {.importcpp: "(gd(#) + #)", grim.}
@@ -379,6 +385,14 @@ macro newFieldType*(name: untyped): untyped =
     proc reduce*(src: `name`): `scalarName` {.importcpp: "Grid::sum(gd(#))", grim.}
     proc reduce*(src: `nameD`): `scalarNameD` {.importcpp: "Grid::sum(gd(#))", grim.}
     proc reduce*(src: `nameF`): `scalarNameF` {.importcpp: "Grid::sum(gd(#))", grim.}
+
+  # unit (cold) configuration — only GaugeField supports ColdConfiguration
+  let coldCfg = "Grid::SU<Grid::Nc>::ColdConfiguration(gd(#))"
+  if $name == "LatticeGaugeField":
+    result.add quote do:
+      proc unit*(dst: var `name`) {.importcpp: `coldCfg`, grim.}
+      proc unit*(dst: var `nameD`) {.importcpp: `coldCfg`, grim.}
+      proc unit*(dst: var `nameF`) {.importcpp: `coldCfg`, grim.}
 
 newFieldType(LatticeInteger)
 
@@ -501,6 +515,16 @@ template `[]`*(u: GaugeField; mu: int): untyped = peekLorentz(u, cint(mu))
 
 template `[]=`*(u: var GaugeField; mu: int; src: GaugeLinkField): untyped =
   pokeLorentz(u, src, cint(mu))
+
+# Identity overloads for GaugeLinkField (LatticeColorMatrix).
+# Grid::SU::ColdConfiguration only works on GaugeField (Lorentz-indexed),
+# so we use iMatrix's scalar assignment operator which fills the diagonal.
+proc unit*(dst: var LatticeColorMatrix)
+  {.importcpp: "gd(#) = Grid::ComplexD(1.0, 0.0)", grim.}
+proc unit*(dst: var LatticeColorMatrixD)
+  {.importcpp: "gd(#) = Grid::ComplexD(1.0, 0.0)", grim.}
+proc unit*(dst: var LatticeColorMatrixF)
+  {.importcpp: "gd(#) = Grid::ComplexF(1.0, 0.0)", grim.}
 
 proc peekColor(src: LatticeColorMatrix; i,j: cint): LatticeComplex
   {.importcpp: "Grid::PeekIndex<2>(gd(#), #, #)", grim.}
@@ -665,6 +689,18 @@ proc `[]=`*(target: var FermionField; c,s: int; source: PropagatorField) =
   propToFerm(target, source, cint(c), cint(s))
 
 #[ misc real/complex operations ]#
+
+proc fill*(dst: var LatticeReal; val: float64) {.importcpp: "gd(#) = Grid::RealD(#)", grim.}
+proc fill*(dst: var LatticeRealD; val: float64) {.importcpp: "gd(#) = Grid::RealD(#)", grim.}
+proc fill*(dst: var LatticeRealF; val: float32) {.importcpp: "gd(#) = Grid::RealF(#)", grim.}
+
+proc fill*(dst: var LatticeComplex; val: float64) {.importcpp: "gd(#) = Grid::ComplexD(#, 0.0)", grim.}
+proc fill*(dst: var LatticeComplexD; val: float64) {.importcpp: "gd(#) = Grid::ComplexD(#, 0.0)", grim.}
+proc fill*(dst: var LatticeComplexF; val: float32) {.importcpp: "gd(#) = Grid::ComplexF(#, 0.0)", grim.}
+
+proc fill*(dst: var LatticeComplex; val: Complex) {.importcpp: "gd(#) = Grid::ComplexD(#.re, #.im)", grim.}
+proc fill*(dst: var LatticeComplexD; val: ComplexD) {.importcpp: "gd(#) = Grid::ComplexD(#.re, #.im)", grim.}
+proc fill*(dst: var LatticeComplexF; val: ComplexF) {.importcpp: "gd(#) = Grid::ComplexF(#.re, #.im)", grim.}
 
 proc sum*(src: LatticeInteger): int
   {.importcpp: "Grid::TensorRemove(Grid::sum(gd(#)))", grim.}
