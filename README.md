@@ -1,7 +1,4 @@
-# Grim
-
-A Nim-based domain-specific language for lattice field theory built on
-[Grid](https://github.com/paboyle/Grid).
+This is just a fun side project; not for production usage
 
 ---
 
